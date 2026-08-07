@@ -52,3 +52,7 @@
 - SSID取得には位置情報の許可と位置情報ONが必要。
 - 感染予防タブは SAF でフォルダを選ぶまでスキャンできない（Download を選ぶ想定）。
 - APKは debug ビルド。artifact から取得してインストールする。
+
+## ビルド上の注意
+
+androidx 側が引き込む kotlin-stdlib と kotlin-stdlib-jdk7/jdk8 のバージョン差で `checkDebugDuplicateClasses` が失敗するため、`app/build.gradle` で kotlin-bom 1.8.22 と resolutionStrategy.force により全て 1.8.22 に揃えている。androidx のバージョンを上げる際はこの数値も合わせて見直すこと。
