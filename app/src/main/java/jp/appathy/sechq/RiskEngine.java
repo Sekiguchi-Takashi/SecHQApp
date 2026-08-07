@@ -1,0 +1,234 @@
+package jp.appathy.sechq;
+
+import android.content.Context;
+import android.os.Build;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+
+public class RiskEngine {
+
+    public static class Check {
+        public String category;
+        public String title;
+        public String detail;
+        public String advice;
+        public boolean ok;
+        public int weight;
+
+        Check(String category, String title, boolean ok, int weight, String detail, String advice) {
+            this.category = category;
+            this.title = title;
+            this.ok = ok;
+            this.weight = weight;
+            this.detail = detail;
+            this.advice = advice;
+        }
+    }
+
+    public static final String C_ASSET = "資産";
+    public static final String C_AUTH = "認証";
+    public static final String C_ENDPOINT = "エンドポイント";
+    public static final String C_NETWORK = "ネットワーク";
+    public static final String C_PHYSICAL = "物理";
+
+    public static List<Check> run(Context c, JSONArray accounts, FileScanner.Result files) {
+        List<Check> l = new ArrayList<>();
+
+        // --- 資産 / 脆弱性 ---
+        boolean lock = Collector.isDeviceSecure(c);
+        l.add(new Check(C_ASSET, "画面ロック", lock, 20,
+                lock ? "パスコード等が設定されています" : "端末が無施錠です",
+                "PIN・パターン・生体認証のいずれかを必ず設定する"));
+
+        long age = Collector.patchAgeDays();
+        boolean patchOk = age >= 0 && age <= 90;
+        l.add(new Check(C_ASSET, "セキュリティパッチ",
+                patchOk, 15,
+                age < 0 ? "パッチ日付を取得できません" : "適用日から " + age + " 日経過",
+                "システム更新を確認し、90日以内のパッチを維持する"));
+
+        boolean osOk = Build.VERSION.SDK_INT >= 30;
+        l.add(new Check(C_ASSET, "OSバージョン", osOk, 10,
+                "Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")",
+                "サポート対象のOSバージョンへ更新、または端末を更改する"));
+
+        int timeout = Collector.screenTimeoutSec(c);
+        boolean toOk = timeout > 0 && timeout <= 300;
+        l.add(new Check(C_ASSET, "画面自動オフ", toOk, 5,
+                timeout < 0 ? "取得不可" : timeout + " 秒",
+                "5分以内に自動ロックされるよう設定する"));
+
+        // --- エンドポイント ---
+        boolean adb = Collector.global(c, android.provider.Settings.Global.ADB_ENABLED);
+        l.add(new Check(C_ENDPOINT, "USBデバッグ", !adb, 10,
+                adb ? "有効になっています" : "無効です",
+                "業務端末ではUSBデバッグを無効にする"));
+
+        boolean dev = Collector.global(c, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED);
+        l.add(new Check(C_ENDPOINT, "開発者オプション", !dev, 5,
+                dev ? "有効になっています" : "無効です",
+                "不要であれば開発者オプションを無効にする"));
+
+        boolean unknown = Collector.unknownSources(c);
+        l.add(new Check(C_ENDPOINT, "提供元不明アプリ", !unknown, 10,
+                unknown ? "インストール許可されたアプリがあります" : "許可なし",
+                "野良APKの導入経路を塞ぐ（許可を取り消す）"));
+
+        int ransom = files == null ? 0 : files.ransom.size();
+        int danger = files == null ? 0 : files.danger.size();
+        int dbl = files == null ? 0 : files.doubleExt.size();
+        if (files != null && files.scanned) {
+            l.add(new Check(C_ENDPOINT, "ランサムウェア痕跡", ransom == 0, 25,
+                    ransom == 0 ? "暗号化拡張子は検出されませんでした" : ransom + " 件の暗号化拡張子を検出",
+                    "直ちにネットワークから切り離し、バックアップから復旧する"));
+            l.add(new Check(C_ENDPOINT, "危険拡張子", danger == 0, 10,
+                    danger == 0 ? "実行形式ファイルなし" : danger + " 件の実行形式ファイル",
+                    "不要な実行形式ファイルを削除し、出所を確認する"));
+            l.add(new Check(C_ENDPOINT, "二重拡張子", dbl == 0, 15,
+                    dbl == 0 ? "偽装ファイルなし" : dbl + " 件の二重拡張子を検出",
+                    "文書を装った実行ファイルの可能性。開かずに削除する"));
+        } else {
+            l.add(new Check(C_ENDPOINT, "ダウンロード監視", false, 8,
+                    "監視フォルダが未設定です",
+                    "感染予防タブで監視フォルダを選択する"));
+        }
+
+        // --- 認証 ---
+        int n = accounts == null ? 0 : accounts.length();
+        if (n == 0) {
+            l.add(new Check(C_AUTH, "アカウント棚卸し", false, 10,
+                    "SaaSアカウントが未登録です",
+                    "認証タブに業務利用中のSaaSを登録する"));
+        } else {
+            int noMfa = 0;
+            int oldPw = 0;
+            for (int i = 0; i < n; i++) {
+                JSONObject o = accounts.optJSONObject(i);
+                if (o == null) {
+                    continue;
+                }
+                if (!o.optBoolean("mfa", false)) {
+                    noMfa++;
+                }
+                if (daysSince(o.optString("pw", "")) > 180) {
+                    oldPw++;
+                }
+            }
+            l.add(new Check(C_AUTH, "多要素認証", noMfa == 0, 20,
+                    noMfa == 0 ? n + " 件すべてMFA有効" : n + " 件中 " + noMfa + " 件がMFA未設定",
+                    "MFA未設定のSaaSから優先的に有効化する"));
+            l.add(new Check(C_AUTH, "パスワード鮮度", oldPw == 0, 10,
+                    oldPw == 0 ? "180日以内に更新済み" : oldPw + " 件が180日以上未更新",
+                    "パスワードマネージャで長い固有パスワードへ更新する"));
+        }
+
+        // --- ネットワーク ---
+        boolean wifi = Collector.isWifi(c);
+        boolean vpn = Collector.vpnActive(c);
+        l.add(new Check(C_NETWORK, "VPN", !wifi || vpn, 10,
+                vpn ? "VPN接続中" : (wifi ? "Wi-Fi接続中でVPN未使用" : "モバイル回線"),
+                "社外Wi-Fi利用時はVPNを経由する"));
+
+        boolean pdns = Collector.privateDnsActive(c);
+        l.add(new Check(C_NETWORK, "プライベートDNS", pdns, 8,
+                pdns ? "有効" : "無効",
+                "DNS over TLS を設定し、名前解決の盗聴・改ざんを防ぐ"));
+
+        // --- 物理 ---
+        boolean home = Store.prefs(c).contains("home_lat");
+        l.add(new Check(C_PHYSICAL, "拠点登録", home, 5,
+                home ? "拠点が登録済み" : "拠点が未登録です",
+                "物理・外出タブで拠点を登録し、外出判定を有効にする"));
+
+        return l;
+    }
+
+    public static long daysSince(String yyyymmdd) {
+        if (yyyymmdd == null || yyyymmdd.length() < 8) {
+            return 99999;
+        }
+        try {
+            Date d = new SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(yyyymmdd);
+            if (d == null) {
+                return 99999;
+            }
+            return (System.currentTimeMillis() - d.getTime()) / 86400000L;
+        } catch (Exception e) {
+            return 99999;
+        }
+    }
+
+    public static int score(List<Check> checks) {
+        int lost = 0;
+        for (Check c : checks) {
+            if (!c.ok) {
+                lost += c.weight;
+            }
+        }
+        int s = 100 - lost;
+        return Math.max(0, Math.min(100, s));
+    }
+
+    public static LinkedHashMap<String, Integer> byCategory(List<Check> checks) {
+        LinkedHashMap<String, Integer> total = new LinkedHashMap<>();
+        LinkedHashMap<String, Integer> lost = new LinkedHashMap<>();
+        for (Check c : checks) {
+            total.put(c.category, get(total, c.category) + c.weight);
+            if (!c.ok) {
+                lost.put(c.category, get(lost, c.category) + c.weight);
+            }
+        }
+        LinkedHashMap<String, Integer> out = new LinkedHashMap<>();
+        for (String k : total.keySet()) {
+            int t = get(total, k);
+            int v = t == 0 ? 100 : (int) Math.round(100.0 * (t - get(lost, k)) / t);
+            out.put(k, v);
+        }
+        return out;
+    }
+
+    private static int get(LinkedHashMap<String, Integer> m, String k) {
+        Integer v = m.get(k);
+        return v == null ? 0 : v;
+    }
+
+    public static String rank(int score) {
+        if (score >= 90) {
+            return "A / 良好";
+        }
+        if (score >= 75) {
+            return "B / 概ね良好";
+        }
+        if (score >= 60) {
+            return "C / 要改善";
+        }
+        if (score >= 40) {
+            return "D / 危険";
+        }
+        return "E / 重大リスク";
+    }
+
+    public static List<Check> failures(List<Check> checks) {
+        List<Check> l = new ArrayList<>();
+        for (Check c : checks) {
+            if (!c.ok) {
+                l.add(c);
+            }
+        }
+        java.util.Collections.sort(l, new java.util.Comparator<Check>() {
+            @Override
+            public int compare(Check a, Check b) {
+                return b.weight - a.weight;
+            }
+        });
+        return l;
+    }
+}
