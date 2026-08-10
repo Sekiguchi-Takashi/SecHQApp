@@ -38,8 +38,10 @@ public class RiskEngine {
     public static final String C_ENDPOINT = "エンドポイント";
     public static final String C_NETWORK = "ネットワーク";
     public static final String C_PHYSICAL = "物理";
+    public static final String C_DATA = "情報資産";
 
-    public static List<Check> run(Context c, JSONArray accounts, FileScanner.Result files) {
+    public static List<Check> run(Context c, JSONArray accounts, FileScanner.Result files,
+                                  DocClassifier.Result docs) {
         List<Check> l = new ArrayList<>();
 
         // --- 資産 / 脆弱性 ---
@@ -130,6 +132,32 @@ public class RiskEngine {
                     "パスワードマネージャで長い固有パスワードへ更新する"));
         }
 
+        // --- 情報資産 (機密情報分類) ---
+        if (docs != null && docs.error == null && docs.scanned > 0) {
+            int sensitive = docs.sensitive();
+            l.add(new Check(C_DATA, "機密文書の所在", sensitive == 0, 15,
+                    sensitive == 0
+                            ? docs.scanned + " 件を解析し、機密相当は検出されませんでした"
+                            : docs.scanned + " 件中 " + sensitive + " 件が機密相当（極秘/社外秘）",
+                    "端末内の機密文書を削除するか、暗号化された共有領域へ移す"));
+
+            int unlabeled = 0;
+            for (DocClassifier.Doc d : docs.docs) {
+                boolean high = DocClassifier.L_TOP.equals(d.label)
+                        || DocClassifier.L_CONF.equals(d.label);
+                if (high && !d.name.startsWith("【")) {
+                    unlabeled++;
+                }
+            }
+            l.add(new Check(C_DATA, "ラベル付与", unlabeled == 0, 10,
+                    unlabeled == 0 ? "機密文書はすべてラベル済み" : unlabeled + " 件が未ラベル",
+                    "機密情報タブでラベルを付与し、取扱区分を明示する"));
+        } else {
+            l.add(new Check(C_DATA, "機密情報分類", false, 8,
+                    "文書解析が未実行です",
+                    "機密情報タブで解析を実行する"));
+        }
+
         // --- ネットワーク ---
         boolean wifi = Collector.isWifi(c);
         boolean vpn = Collector.vpnActive(c);
@@ -147,6 +175,24 @@ public class RiskEngine {
         l.add(new Check(C_PHYSICAL, "拠点登録", home, 5,
                 home ? "拠点が登録済み" : "拠点が未登録です",
                 "物理・外出タブで拠点を登録し、外出判定を有効にする"));
+
+        JSONObject insp = DeskInspector.latest(c);
+        if (insp == null) {
+            l.add(new Check(C_PHYSICAL, "書類点検", false, 8,
+                    "未実施です",
+                    "書類点検タブで机上を撮影し、放置書類を点検する"));
+        } else {
+            String at = insp.optString("t", "");
+            long days = daysSince(at.length() >= 10 ? at.substring(0, 10) : "");
+            String lab = insp.optString("label", DocClassifier.L_PUBLIC);
+            boolean clean = !DocClassifier.L_TOP.equals(lab) && !DocClassifier.L_CONF.equals(lab);
+            boolean fresh = days <= 7;
+            l.add(new Check(C_PHYSICAL, "書類点検", clean && fresh, 12,
+                    "最終点検 " + at + " / 判定 " + lab
+                            + (fresh ? "" : "（7日以上前）"),
+                    clean ? "7日以内に机上を再点検する"
+                            : "机上の機密書類を施錠保管し、再点検する"));
+        }
 
         return l;
     }

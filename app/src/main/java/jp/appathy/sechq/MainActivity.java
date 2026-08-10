@@ -58,7 +58,8 @@ public class MainActivity extends AppCompatActivity {
     static final int ACC = 0xFF58A6FF;
 
     static final String[] TABS = {
-            "資産", "脆弱性", "認証", "感染予防", "ネットワーク", "物理・外出", "AI分析"
+            "資産", "脆弱性", "認証", "感染予防", "機密情報", "ネットワーク", "物理・外出",
+            "書類点検", "AI分析"
     };
 
     private FrameLayout content;
@@ -71,6 +72,11 @@ public class MainActivity extends AppCompatActivity {
     private String pendingSaveBody = "";
 
     private FileScanner.Result lastScan;
+    private DocClassifier.Result lastDocs;
+    private DeskInspector.Result lastInspection;
+    private ActivityResultLauncher<Uri> cameraLauncher;
+    private ActivityResultLauncher<String> pickLauncher;
+    private Uri captureUri;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,6 +95,7 @@ public class MainActivity extends AppCompatActivity {
                             }
                             Store.prefs(this).edit().putString("tree", uri.toString()).apply();
                             lastScan = null;
+                            lastDocs = null;
                             render(3);
                         }
                     }
@@ -117,6 +124,22 @@ public class MainActivity extends AppCompatActivity {
         permLauncher = registerForActivityResult(
                 new ActivityResultContracts.RequestMultiplePermissions(),
                 r -> render(current));
+
+        cameraLauncher = registerForActivityResult(
+                new ActivityResultContracts.TakePicture(),
+                success -> {
+                    if (success != null && success && captureUri != null) {
+                        runInspection(captureUri);
+                    }
+                });
+
+        pickLauncher = registerForActivityResult(
+                new ActivityResultContracts.GetContent(),
+                uri -> {
+                    if (uri != null) {
+                        runInspection(uri);
+                    }
+                });
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -220,10 +243,16 @@ public class MainActivity extends AppCompatActivity {
                 screenFiles(body);
                 break;
             case 4:
-                screenNetwork(body);
+                screenDocs(body);
                 break;
             case 5:
+                screenNetwork(body);
+                break;
+            case 6:
                 screenPhysical(body);
+                break;
+            case 7:
+                screenDesk(body);
                 break;
             default:
                 screenAi(body);
@@ -442,6 +471,151 @@ public class MainActivity extends AppCompatActivity {
         v.addView(c);
     }
 
+    private void screenDocs(LinearLayout v) {
+        v.addView(sectionTitle("4. AI機密情報分類",
+                "Office・PDF・テキストを解析し、機密度を判定してラベルを付与します"));
+
+        String tree = Store.prefs(this).getString("tree", "");
+        if (tree.isEmpty()) {
+            v.addView(note("監視フォルダが未選択です。感染予防タブで選択してください"));
+        }
+
+        v.addView(btn("文書を解析", vw -> {
+            toast("解析中です");
+            analyzeDocs();
+        }));
+
+        if (lastDocs == null) {
+            v.addView(note("解析未実行です"));
+            return;
+        }
+
+        LinearLayout s = card();
+        if (lastDocs.error != null) {
+            kvColor(s, "結果", lastDocs.error, WARN);
+            v.addView(s);
+            return;
+        }
+        kv(s, "解析文書数", lastDocs.scanned + " 件");
+        kvColor(s, DocClassifier.L_TOP, lastDocs.count(DocClassifier.L_TOP) + " 件",
+                lastDocs.count(DocClassifier.L_TOP) == 0 ? OK : BAD);
+        kvColor(s, DocClassifier.L_CONF, lastDocs.count(DocClassifier.L_CONF) + " 件",
+                lastDocs.count(DocClassifier.L_CONF) == 0 ? OK : WARN);
+        kv(s, DocClassifier.L_INTERNAL, lastDocs.count(DocClassifier.L_INTERNAL) + " 件");
+        kv(s, DocClassifier.L_PUBLIC, lastDocs.count(DocClassifier.L_PUBLIC) + " 件");
+        v.addView(s);
+
+        if (lastDocs.sensitive() > 0) {
+            v.addView(btn("機密文書にラベルを一括付与", vw -> {
+                int n = 0;
+                for (DocClassifier.Doc d : lastDocs.docs) {
+                    boolean high = DocClassifier.L_TOP.equals(d.label)
+                            || DocClassifier.L_CONF.equals(d.label);
+                    if (high && DocClassifier.applyLabel(this, d)) {
+                        n++;
+                    }
+                }
+                toast(n + " 件にラベルを付与しました");
+                analyzeDocs();
+            }));
+        }
+
+        int shown = 0;
+        for (DocClassifier.Doc d : lastDocs.docs) {
+            if (shown >= 40) {
+                break;
+            }
+            if (DocClassifier.L_PUBLIC.equals(d.label)) {
+                continue;
+            }
+            shown++;
+            v.addView(docCard(d));
+        }
+        if (shown == 0) {
+            v.addView(note("機密度が高い文書は検出されませんでした"));
+        }
+    }
+
+    private void analyzeDocs() {
+        final String tree = Store.prefs(this).getString("tree", "");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final DocClassifier.Result r = DocClassifier.scan(MainActivity.this, tree);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        lastDocs = r;
+                        if (current == 4) {
+                            render(4);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private View docCard(DocClassifier.Doc d) {
+        LinearLayout l = card();
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+
+        int col = DocClassifier.L_TOP.equals(d.label) ? BAD
+                : (DocClassifier.L_CONF.equals(d.label) ? WARN : ACC);
+        TextView badge = new TextView(this);
+        badge.setText(d.label);
+        badge.setTextColor(0xFF0E1116);
+        badge.setTypeface(Typeface.DEFAULT_BOLD);
+        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        badge.setPadding(dp(8), dp(2), dp(8), dp(2));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(col);
+        g.setCornerRadius(dp(6));
+        badge.setBackground(g);
+        head.addView(badge);
+
+        TextView sc = new TextView(this);
+        sc.setText("  " + d.type + " / スコア " + d.score);
+        sc.setTextColor(SUB);
+        sc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        head.addView(sc);
+        l.addView(head);
+
+        TextView t = new TextView(this);
+        t.setText(d.name);
+        t.setTextColor(TEXT);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        t.setPadding(0, dp(6), 0, 0);
+        l.addView(t);
+
+        TextView h = new TextView(this);
+        StringBuilder sb = new StringBuilder();
+        for (String x : d.hits) {
+            if (sb.length() > 0) {
+                sb.append(" / ");
+            }
+            sb.append(x);
+        }
+        h.setText("検出根拠: " + (sb.length() == 0 ? "なし" : sb.toString())
+                + (d.textOk ? "" : "（本文抽出不可・ファイル名のみ判定）"));
+        h.setTextColor(SUB);
+        h.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        h.setPadding(0, dp(4), 0, 0);
+        l.addView(h);
+
+        if (!d.name.startsWith("【")) {
+            l.addView(btn("この文書にラベルを付与", vw -> {
+                if (DocClassifier.applyLabel(this, d)) {
+                    toast("ラベルを付与しました");
+                    analyzeDocs();
+                } else {
+                    toast("付与できませんでした");
+                }
+            }));
+        }
+        return l;
+    }
+
     private void screenNetwork(LinearLayout v) {
         v.addView(sectionTitle("7. AIネットワーク管理", "SSID・VPN・DNSの安全判定"));
 
@@ -475,7 +649,7 @@ public class MainActivity extends AppCompatActivity {
         j.addView(t);
         v.addView(j);
 
-        v.addView(btn("再取得", vw -> render(4)));
+        v.addView(btn("再取得", vw -> render(5)));
     }
 
     private void screenPhysical(LinearLayout v) {
@@ -528,7 +702,104 @@ public class MainActivity extends AppCompatActivity {
             v.addView(l);
         }
 
-        v.addView(note("※ 撮影による書類放置検知はv1.1で追加予定です"));
+        v.addView(note("※ 机上の書類放置検知は「書類点検」タブで行えます"));
+    }
+
+    private void screenDesk(LinearLayout v) {
+        v.addView(sectionTitle("5. AI物理セキュリティ（書類点検）",
+                "机上を撮影し、文字認識で機密書類の放置を検出します"));
+
+        v.addView(btn("撮影して点検", vw -> {
+            try {
+                java.io.File dir = new java.io.File(getCacheDir(), "captures");
+                if (!dir.exists()) {
+                    dir.mkdirs();
+                }
+                java.io.File f = new java.io.File(dir, "desk.jpg");
+                captureUri = androidx.core.content.FileProvider.getUriForFile(
+                        this, getPackageName() + ".fileprovider", f);
+                cameraLauncher.launch(captureUri);
+            } catch (Exception e) {
+                toast("カメラを起動できませんでした");
+            }
+        }));
+
+        v.addView(btn("画像を選んで点検", vw -> pickLauncher.launch("image/*")));
+
+        if (lastInspection != null) {
+            LinearLayout c = card();
+            if (lastInspection.error != null) {
+                kvColor(c, "結果", lastInspection.error, WARN);
+            } else {
+                boolean risky = DocClassifier.L_TOP.equals(lastInspection.label)
+                        || DocClassifier.L_CONF.equals(lastInspection.label);
+                kvColor(c, "判定", risky ? "機密書類の放置を検出" : "問題は検出されませんでした",
+                        risky ? BAD : OK);
+                kv(c, "分類", lastInspection.label + " (スコア " + lastInspection.score + ")");
+                kv(c, "認識行数", lastInspection.lines + " 行");
+                StringBuilder sb = new StringBuilder();
+                if (lastInspection.hits != null) {
+                    for (String h : lastInspection.hits) {
+                        if (sb.length() > 0) {
+                            sb.append(" / ");
+                        }
+                        sb.append(h);
+                    }
+                }
+                kv(c, "検出根拠", sb.length() == 0 ? "なし" : sb.toString());
+                if (lastInspection.excerpt != null && !lastInspection.excerpt.trim().isEmpty()) {
+                    TextView t = new TextView(this);
+                    t.setText("認識テキスト（抜粋）\n" + lastInspection.excerpt);
+                    t.setTextColor(SUB);
+                    t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+                    t.setPadding(0, dp(8), 0, 0);
+                    c.addView(t);
+                }
+            }
+            v.addView(c);
+        }
+
+        JSONArray log = Store.loadArray(this, DeskInspector.F_INSPECTIONS);
+        if (log.length() > 0) {
+            LinearLayout l = card();
+            TextView t = new TextView(this);
+            t.setText("点検履歴 (最新15件)");
+            t.setTextColor(SUB);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            l.addView(t);
+            int start = Math.max(0, log.length() - 15);
+            for (int i = log.length() - 1; i >= start; i--) {
+                JSONObject o = log.optJSONObject(i);
+                if (o == null) {
+                    continue;
+                }
+                String lab = o.optString("label");
+                TextView e = new TextView(this);
+                e.setText(o.optString("t") + "  " + lab + "  (" + o.optInt("score") + ")");
+                e.setTextColor(DocClassifier.L_TOP.equals(lab) || DocClassifier.L_CONF.equals(lab)
+                        ? BAD : TEXT);
+                e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                l.addView(e);
+            }
+            v.addView(l);
+        } else {
+            v.addView(note("点検履歴はありません"));
+        }
+
+        v.addView(note("※ 画像は端末内で処理され、送信も保存もされません（結果のみ記録）"));
+    }
+
+    private void runInspection(Uri uri) {
+        toast("点検中です");
+        DeskInspector.inspect(this, uri, r -> {
+            lastInspection = r;
+            if (r.error == null) {
+                DeskInspector.record(this, r);
+            }
+            if (current == 7) {
+                render(7);
+            }
+        });
     }
 
     private void screenAi(LinearLayout v) {
@@ -598,7 +869,7 @@ public class MainActivity extends AppCompatActivity {
                 lastScan = FileScanner.scan(this, tree);
             }
         }
-        return RiskEngine.run(this, accounts, lastScan);
+        return RiskEngine.run(this, accounts, lastScan, lastDocs);
     }
 
     private JSONObject buildJson(List<RiskEngine.Check> checks, int score) {
@@ -610,6 +881,10 @@ public class MainActivity extends AppCompatActivity {
             o.put("資産", Collector.toJson(Collector.asset(this)));
             o.put("ネットワーク", Collector.toJson(Collector.network(this)));
             o.put("アカウント", Store.loadArray(this, Store.F_ACCOUNTS));
+            JSONObject insp = DeskInspector.latest(this);
+            if (insp != null) {
+                o.put("直近の書類点検", insp);
+            }
             JSONArray ca = new JSONArray();
             for (RiskEngine.Check c : checks) {
                 JSONObject x = new JSONObject();
@@ -624,6 +899,26 @@ public class MainActivity extends AppCompatActivity {
                 ca.put(x);
             }
             o.put("判定結果", ca);
+            if (lastDocs != null && lastDocs.error == null && lastDocs.scanned > 0) {
+                JSONArray da = new JSONArray();
+                for (DocClassifier.Doc d : lastDocs.docs) {
+                    if (DocClassifier.L_PUBLIC.equals(d.label)) {
+                        continue;
+                    }
+                    JSONObject x = new JSONObject();
+                    x.put("ファイル名", d.name);
+                    x.put("種別", d.type);
+                    x.put("ラベル", d.label);
+                    x.put("スコア", d.score);
+                    x.put("根拠", new JSONArray(d.hits));
+                    da.put(x);
+                }
+                JSONObject doc = new JSONObject();
+                doc.put("解析件数", lastDocs.scanned);
+                doc.put("機密相当", lastDocs.sensitive());
+                doc.put("一覧", da);
+                o.put("機密情報分類", doc);
+            }
             JSONObject cat = new JSONObject();
             for (Map.Entry<String, Integer> e : RiskEngine.byCategory(checks).entrySet()) {
                 cat.put(e.getKey(), e.getValue());
@@ -746,8 +1041,8 @@ public class MainActivity extends AppCompatActivity {
         }
         Store.saveArray(this, Store.F_LOCATION, log);
         toast(asHome ? "拠点を登録しました" : "現在地を記録しました");
-        if (current == 5) {
-            render(5);
+        if (current == 6) {
+            render(6);
         }
     }
 
