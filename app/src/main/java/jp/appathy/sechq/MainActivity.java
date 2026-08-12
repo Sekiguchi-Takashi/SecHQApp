@@ -58,7 +58,7 @@ public class MainActivity extends AppCompatActivity {
     static final int ACC = 0xFF58A6FF;
 
     static final String[] TABS = {
-            "資産", "脆弱性", "認証", "感染予防", "機密情報", "アプリ", "ネットワーク",
+            "ホーム", "資産", "脆弱性", "認証", "感染予防", "機密情報", "アプリ", "ネットワーク",
             "物理・外出", "書類点検", "AI分析"
     };
 
@@ -112,7 +112,7 @@ public class MainActivity extends AppCompatActivity {
                             Store.prefs(this).edit().putString("tree", uri.toString()).apply();
                             lastScan = null;
                             lastDocs = null;
-                            render(3);
+                            render(4);
                         }
                     }
                 });
@@ -175,6 +175,21 @@ public class MainActivity extends AppCompatActivity {
         excluded = new java.util.HashSet<>(Store.prefs(this)
                 .getStringSet("excluded", new java.util.HashSet<String>()));
         scheduleDaily();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final AppAuditor.Result r = AppAuditor.audit(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        lastAudit = r;
+                        if (current == 0) {
+                            render(0);
+                        }
+                    }
+                });
+            }
+        }).start();
         render(0);
     }
 
@@ -250,30 +265,33 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout body = col();
         switch (index) {
             case 0:
-                screenAsset(body);
+                screenHome(body);
                 break;
             case 1:
-                screenVuln(body);
+                screenAsset(body);
                 break;
             case 2:
-                screenAuth(body);
+                screenVuln(body);
                 break;
             case 3:
-                screenFiles(body);
+                screenAuth(body);
                 break;
             case 4:
-                screenDocs(body);
+                screenFiles(body);
                 break;
             case 5:
-                screenApps(body);
+                screenDocs(body);
                 break;
             case 6:
-                screenNetwork(body);
+                screenApps(body);
                 break;
             case 7:
-                screenPhysical(body);
+                screenNetwork(body);
                 break;
             case 8:
+                screenPhysical(body);
+                break;
+            case 9:
                 screenDesk(body);
                 break;
             default:
@@ -285,6 +303,159 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ---------------- screens ----------------
+
+    private void screenHome(LinearLayout v) {
+        v.addView(sectionTitle("サイバー攻撃への備え",
+                "起動時チェックの結果を攻撃別に分類しています。タップで詳細を表示します"));
+
+        List<RiskEngine.Check> checks = allChecks();
+        int s = RiskEngine.score(checks);
+
+        LinearLayout head = card();
+        TextView t = new TextView(this);
+        t.setText("総合スコア " + s + "　" + RiskEngine.rank(s)
+                + (scanning ? "　(スキャン中…)" : ""));
+        t.setTextColor(s >= 80 ? OK : (s >= 60 ? WARN : BAD));
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        head.addView(t);
+        v.addView(head);
+
+        List<AttackCatalog.Status> list = AttackCatalog.evaluate(checks);
+        java.util.Collections.sort(list,
+                new java.util.Comparator<AttackCatalog.Status>() {
+                    @Override
+                    public int compare(AttackCatalog.Status a, AttackCatalog.Status b) {
+                        return b.level - a.level;
+                    }
+                });
+        for (final AttackCatalog.Status st : list) {
+            v.addView(attackCard(st));
+        }
+        v.addView(note("🔐安全 = 関連チェック全てOK / ✅️要確認 = 未実施の点検あり / ⚠️注意 = 改善項目あり / 💣️危険 = 重大な項目がNG"));
+    }
+
+    private View attackCard(final AttackCatalog.Status st) {
+        LinearLayout l = card();
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView e = new TextView(this);
+        e.setText(st.attack.emoji);
+        e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        row.addView(e);
+
+        LinearLayout mid = new LinearLayout(this);
+        mid.setOrientation(LinearLayout.VERTICAL);
+        mid.setPadding(dp(10), 0, dp(6), 0);
+        mid.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView n = new TextView(this);
+        n.setText(st.attack.name);
+        n.setTextColor(TEXT);
+        n.setTypeface(Typeface.DEFAULT_BOLD);
+        n.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        mid.addView(n);
+        int ng = 0;
+        for (RiskEngine.Check c : st.found) {
+            if (!c.ok) {
+                ng++;
+            }
+        }
+        TextView sub = new TextView(this);
+        sub.setText("関連チェック " + st.found.size() + " 件中 NG " + ng + " 件"
+                + (st.missing.isEmpty() ? "" : " / 未実施 " + st.missing.size() + " 件"));
+        sub.setTextColor(SUB);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        mid.addView(sub);
+        row.addView(mid);
+
+        int col = st.level == AttackCatalog.DANGER ? BAD
+                : (st.level == AttackCatalog.WARN ? WARN
+                : (st.level == AttackCatalog.CONFIRM ? ACC : OK));
+        TextView badge = new TextView(this);
+        badge.setText(AttackCatalog.levelEmoji(st.level) + " " + AttackCatalog.levelText(st.level));
+        badge.setTextColor(0xFF0E1116);
+        badge.setTypeface(Typeface.DEFAULT_BOLD);
+        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        badge.setPadding(dp(10), dp(4), dp(10), dp(4));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(col);
+        g.setCornerRadius(dp(8));
+        badge.setBackground(g);
+        row.addView(badge);
+
+        l.addView(row);
+        l.setOnClickListener(vw -> attackDetail(st));
+        return l;
+    }
+
+    private void attackDetail(AttackCatalog.Status st) {
+        ScrollView sv = new ScrollView(this);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(12), dp(20), dp(12));
+        box.setBackgroundColor(CARD);
+
+        TextView h = new TextView(this);
+        h.setText(st.attack.emoji + " " + st.attack.name + "　"
+                + AttackCatalog.levelEmoji(st.level) + " " + AttackCatalog.levelText(st.level));
+        h.setTextColor(TEXT);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        h.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        box.addView(h);
+
+        TextView o = new TextView(this);
+        o.setText("\n【手口】\n" + st.attack.outline);
+        o.setTextColor(TEXT);
+        o.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        box.addView(o);
+
+        TextView ct = new TextView(this);
+        ct.setText("\n【この端末の状態】");
+        ct.setTextColor(SUB);
+        ct.setTypeface(Typeface.DEFAULT_BOLD);
+        ct.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        box.addView(ct);
+
+        for (RiskEngine.Check c : st.found) {
+            TextView t = new TextView(this);
+            t.setText((c.ok ? "○ " : "✕ ") + c.title + " — " + c.detail);
+            t.setTextColor(c.ok ? OK : BAD);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            t.setPadding(0, dp(4), 0, 0);
+            box.addView(t);
+        }
+        for (String m : st.missing) {
+            TextView t = new TextView(this);
+            t.setText("？ " + m + " — 未実施 (該当タブで実行してください)");
+            t.setTextColor(ACC);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            t.setPadding(0, dp(4), 0, 0);
+            box.addView(t);
+        }
+
+        StringBuilder adv = new StringBuilder();
+        for (RiskEngine.Check c : st.found) {
+            if (!c.ok && c.advice != null && !c.advice.isEmpty()) {
+                adv.append("・").append(c.advice).append('\n');
+            }
+        }
+        if (adv.length() > 0) {
+            TextView at = new TextView(this);
+            at.setText("\n【今すぐできる対策】\n" + adv);
+            at.setTextColor(WARN);
+            at.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            box.addView(at);
+        }
+
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setView(sv)
+                .setPositiveButton("閉じる", null)
+                .show();
+    }
 
     private void screenAsset(LinearLayout v) {
         v.addView(sectionTitle("1. 資産管理", "端末・OS・ブラウザの現況を収集します"));
@@ -370,7 +541,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
                 Store.saveArray(this, Store.F_ACCOUNTS, out);
-                render(2);
+                render(3);
             }));
             v.addView(c);
         }
@@ -420,7 +591,7 @@ public class MainActivity extends AppCompatActivity {
                     } catch (Exception ignored) {
                     }
                     Store.saveArray(this, Store.F_ACCOUNTS, arr);
-                    render(2);
+                    render(3);
                 })
                 .setNegativeButton("キャンセル", null)
                 .show();
@@ -514,7 +685,7 @@ public class MainActivity extends AppCompatActivity {
                 Store.prefs(this).edit()
                         .putStringSet("excluded", new java.util.HashSet<String>()).apply();
                 toast("除外リストを初期化しました");
-                render(4);
+                render(5);
             }));
         }
 
@@ -652,8 +823,8 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void run() {
                             lastAudit = r;
-                            if (current == 5) {
-                                render(5);
+                            if (current == 6) {
+                                render(6);
                             }
                         }
                     });
@@ -725,8 +896,8 @@ public class MainActivity extends AppCompatActivity {
                     public void run() {
                         lastDocs = r;
                         analyzing = false;
-                        if (current == 4) {
-                            render(4);
+                        if (current == 5) {
+                            render(5);
                         }
                     }
                 });
@@ -835,7 +1006,7 @@ public class MainActivity extends AppCompatActivity {
         j.addView(t);
         v.addView(j);
 
-        v.addView(btn("再取得", vw -> render(6)));
+        v.addView(btn("再取得", vw -> render(7)));
     }
 
     private void screenPhysical(LinearLayout v) {
@@ -982,8 +1153,8 @@ public class MainActivity extends AppCompatActivity {
             if (r.error == null) {
                 DeskInspector.record(this, r);
             }
-            if (current == 8) {
-                render(8);
+            if (current == 9) {
+                render(9);
             }
         });
     }
@@ -1262,8 +1433,8 @@ public class MainActivity extends AppCompatActivity {
         }
         Store.saveArray(this, Store.F_LOCATION, log);
         toast(asHome ? "拠点を登録しました" : "現在地を記録しました");
-        if (current == 7) {
-            render(7);
+        if (current == 8) {
+            render(8);
         }
     }
 
