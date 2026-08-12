@@ -54,6 +54,10 @@ public class Collector {
         m.put("接続種別", transport(c));
         m.put("SSID", ssid(c));
         m.put("VPN", vpnActive(c) ? "接続中" : "未使用");
+        String sec = wifiSecurity(c);
+        if (sec != null) {
+            m.put("Wi-Fi暗号化", sec);
+        }
         m.put("プライベートDNS", privateDns(c));
         m.put("DNSサーバー", dnsServers(c));
         m.put("IPアドレス", ipAddress(c));
@@ -261,6 +265,44 @@ public class Collector {
             return s;
         } catch (Exception e) {
             return "不明";
+        }
+    }
+
+    /** null = 判定不可(非Wi-Fi or API<31) */
+    public static String wifiSecurity(Context c) {
+        try {
+            if (!isWifi(c) || Build.VERSION.SDK_INT < 31) {
+                return null;
+            }
+            WifiManager wm = (WifiManager) c.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wm == null) {
+                return null;
+            }
+            WifiInfo wi = wm.getConnectionInfo();
+            if (wi == null) {
+                return null;
+            }
+            int t = wi.getCurrentSecurityType();
+            switch (t) {
+                case WifiInfo.SECURITY_TYPE_OPEN:
+                    return "オープン(暗号化なし)";
+                case WifiInfo.SECURITY_TYPE_WEP:
+                    return "WEP";
+                case WifiInfo.SECURITY_TYPE_PSK:
+                    return "WPA/WPA2-PSK";
+                case WifiInfo.SECURITY_TYPE_SAE:
+                    return "WPA3-SAE";
+                case WifiInfo.SECURITY_TYPE_EAP:
+                case WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE:
+                    return "エンタープライズ";
+                case WifiInfo.SECURITY_TYPE_OWE:
+                    return "OWE";
+                default:
+                    return "その他/不明";
+            }
+        } catch (Exception e) {
+            return null;
         }
     }
 

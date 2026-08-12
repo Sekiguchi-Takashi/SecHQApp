@@ -58,8 +58,8 @@ public class MainActivity extends AppCompatActivity {
     static final int ACC = 0xFF58A6FF;
 
     static final String[] TABS = {
-            "資産", "脆弱性", "認証", "感染予防", "機密情報", "ネットワーク", "物理・外出",
-            "書類点検", "AI分析"
+            "資産", "脆弱性", "認証", "感染予防", "機密情報", "アプリ", "ネットワーク",
+            "物理・外出", "書類点検", "AI分析"
     };
 
     private FrameLayout content;
@@ -74,13 +74,29 @@ public class MainActivity extends AppCompatActivity {
     private FileScanner.Result lastScan;
     private DocClassifier.Result lastDocs;
     private DeskInspector.Result lastInspection;
+    private AppAuditor.Result lastAudit;
+    private java.util.Set<String> excluded;
     private ActivityResultLauncher<Uri> cameraLauncher;
     private ActivityResultLauncher<String> pickLauncher;
     private Uri captureUri;
 
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (captureUri != null) {
+            outState.putString("captureUri", captureUri.toString());
+        }
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            String cu = savedInstanceState.getString("captureUri");
+            if (cu != null) {
+                captureUri = Uri.parse(cu);
+            }
+        }
 
         treeLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
@@ -156,6 +172,9 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(root);
         requestPerms();
+        excluded = new java.util.HashSet<>(Store.prefs(this)
+                .getStringSet("excluded", new java.util.HashSet<String>()));
+        scheduleDaily();
         render(0);
     }
 
@@ -246,12 +265,15 @@ public class MainActivity extends AppCompatActivity {
                 screenDocs(body);
                 break;
             case 5:
-                screenNetwork(body);
+                screenApps(body);
                 break;
             case 6:
-                screenPhysical(body);
+                screenNetwork(body);
                 break;
             case 7:
+                screenPhysical(body);
+                break;
+            case 8:
                 screenDesk(body);
                 break;
             default:
@@ -420,8 +442,9 @@ public class MainActivity extends AppCompatActivity {
         }));
 
         v.addView(btn("スキャン実行", vw -> {
-            lastScan = FileScanner.scan(this, Store.prefs(this).getString("tree", ""));
-            render(3);
+            toast("スキャン中です");
+            lastScan = null;
+            ensureScan();
         }));
 
         if (lastScan != null) {
@@ -485,6 +508,16 @@ public class MainActivity extends AppCompatActivity {
             analyzeDocs();
         }));
 
+        if (!excluded.isEmpty()) {
+            v.addView(btn("除外リストを空にする (" + excluded.size() + "件)", vw -> {
+                excluded.clear();
+                Store.prefs(this).edit()
+                        .putStringSet("excluded", new java.util.HashSet<String>()).apply();
+                toast("除外リストを初期化しました");
+                render(4);
+            }));
+        }
+
         if (lastDocs == null) {
             v.addView(note("解析未実行です"));
             return;
@@ -536,16 +569,162 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void addHistoryGraph(LinearLayout v) {
+        JSONArray h = Store.loadArray(this, DailyWorker.F_HISTORY);
+        if (h.length() < 2) {
+            return;
+        }
+        LinearLayout c = card();
+        TextView t = new TextView(this);
+        t.setText("スコア推移 (最新14日)");
+        t.setTextColor(SUB);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        c.addView(t);
+        int start = Math.max(0, h.length() - 14);
+        for (int i = start; i < h.length(); i++) {
+            JSONObject o = h.optJSONObject(i);
+            if (o == null) {
+                continue;
+            }
+            int sc = o.optInt("s");
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(0, dp(3), 0, dp(3));
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView d = new TextView(this);
+            d.setText(o.optString("d").substring(5));
+            d.setTextColor(SUB);
+            d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            d.setLayoutParams(new LinearLayout.LayoutParams(dp(48),
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            row.addView(d);
+
+            View bar = new View(this);
+            GradientDrawable g = new GradientDrawable();
+            g.setColor(sc >= 80 ? OK : (sc >= 60 ? WARN : BAD));
+            g.setCornerRadius(dp(3));
+            bar.setBackground(g);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(0, dp(10), sc);
+            bar.setLayoutParams(bp);
+            row.addView(bar);
+
+            View gap = new View(this);
+            gap.setLayoutParams(new LinearLayout.LayoutParams(0, dp(10),
+                    Math.max(1, 100 - sc)));
+            row.addView(gap);
+
+            TextView sv = new TextView(this);
+            sv.setText(String.valueOf(sc));
+            sv.setTextColor(TEXT);
+            sv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            sv.setPadding(dp(6), 0, 0, 0);
+            row.addView(sv);
+            c.addView(row);
+        }
+        v.addView(c);
+    }
+
+    private void scheduleDaily() {
+        try {
+            androidx.work.PeriodicWorkRequest req =
+                    new androidx.work.PeriodicWorkRequest.Builder(
+                            DailyWorker.class, 24, java.util.concurrent.TimeUnit.HOURS)
+                            .build();
+            androidx.work.WorkManager.getInstance(this)
+                    .enqueueUniquePeriodicWork("sechq_daily",
+                            androidx.work.ExistingPeriodicWorkPolicy.KEEP, req);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void screenApps(LinearLayout v) {
+        v.addView(sectionTitle("1b. アプリ棚卸し",
+                "インストール済みアプリの危険権限を検査します"));
+
+        v.addView(btn("棚卸しを実行", vw -> {
+            toast("検査中です");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final AppAuditor.Result r = AppAuditor.audit(MainActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            lastAudit = r;
+                            if (current == 5) {
+                                render(5);
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }));
+
+        if (lastAudit == null) {
+            v.addView(note("棚卸し未実行です"));
+            return;
+        }
+
+        LinearLayout c = card();
+        kv(c, "インストール済み", lastAudit.total + " 件");
+        kvColor(c, "高リスク (スコア5以上)", lastAudit.flagged + " 件",
+                lastAudit.flagged == 0 ? OK : WARN);
+        kv(c, "権限保有 (非システム)", lastAudit.apps.size() + " 件");
+        v.addView(c);
+
+        int shown = 0;
+        for (AppAuditor.AppRisk a : lastAudit.apps) {
+            if (shown >= 40) {
+                break;
+            }
+            shown++;
+            LinearLayout l = card();
+            TextView t = new TextView(this);
+            t.setText(a.label + "  (スコア " + a.score + ")");
+            t.setTextColor(a.score >= 5 ? WARN : TEXT);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            l.addView(t);
+            TextView pk = new TextView(this);
+            pk.setText(a.pkg);
+            pk.setTextColor(SUB);
+            pk.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            l.addView(pk);
+            StringBuilder sb = new StringBuilder();
+            for (String x : a.perms) {
+                if (sb.length() > 0) {
+                    sb.append(" / ");
+                }
+                sb.append(x);
+            }
+            TextView pm = new TextView(this);
+            pm.setText(sb.toString());
+            pm.setTextColor(SUB);
+            pm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            pm.setPadding(0, dp(4), 0, 0);
+            l.addView(pm);
+            v.addView(l);
+        }
+    }
+
+    private boolean analyzing;
+
     private void analyzeDocs() {
+        if (analyzing) {
+            return;
+        }
+        analyzing = true;
         final String tree = Store.prefs(this).getString("tree", "");
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final DocClassifier.Result r = DocClassifier.scan(MainActivity.this, tree);
+                final DocClassifier.Result r = DocClassifier.scan(MainActivity.this, tree, excluded);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         lastDocs = r;
+                        analyzing = false;
                         if (current == 4) {
                             render(4);
                         }
@@ -613,6 +792,13 @@ public class MainActivity extends AppCompatActivity {
                 }
             }));
         }
+        l.addView(btn("誤検知として除外", vw -> {
+            excluded.add(d.name);
+            Store.prefs(this).edit()
+                    .putStringSet("excluded", new java.util.HashSet<>(excluded)).apply();
+            toast("除外しました");
+            analyzeDocs();
+        }));
         return l;
     }
 
@@ -649,7 +835,7 @@ public class MainActivity extends AppCompatActivity {
         j.addView(t);
         v.addView(j);
 
-        v.addView(btn("再取得", vw -> render(5)));
+        v.addView(btn("再取得", vw -> render(6)));
     }
 
     private void screenPhysical(LinearLayout v) {
@@ -796,8 +982,8 @@ public class MainActivity extends AppCompatActivity {
             if (r.error == null) {
                 DeskInspector.record(this, r);
             }
-            if (current == 7) {
-                render(7);
+            if (current == 8) {
+                render(8);
             }
         });
     }
@@ -808,6 +994,8 @@ public class MainActivity extends AppCompatActivity {
         List<RiskEngine.Check> checks = allChecks();
         int s = RiskEngine.score(checks);
         v.addView(scoreCard(s));
+        DailyWorker.appendHistory(this, s);
+        addHistoryGraph(v);
 
         LinearLayout cat = card();
         TextView ct = new TextView(this);
@@ -861,15 +1049,37 @@ public class MainActivity extends AppCompatActivity {
 
     // ---------------- logic helpers ----------------
 
+    private boolean scanning;
+
     private List<RiskEngine.Check> allChecks() {
         JSONArray accounts = Store.loadArray(this, Store.F_ACCOUNTS);
-        if (lastScan == null) {
-            String tree = Store.prefs(this).getString("tree", "");
-            if (!tree.isEmpty()) {
-                lastScan = FileScanner.scan(this, tree);
-            }
+        ensureScan();
+        return RiskEngine.run(this, accounts, lastScan, lastDocs, lastAudit);
+    }
+
+    private void ensureScan() {
+        if (lastScan != null || scanning) {
+            return;
         }
-        return RiskEngine.run(this, accounts, lastScan, lastDocs);
+        final String tree = Store.prefs(this).getString("tree", "");
+        if (tree.isEmpty()) {
+            return;
+        }
+        scanning = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final FileScanner.Result r = FileScanner.scan(MainActivity.this, tree);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        lastScan = r;
+                        scanning = false;
+                        render(current);
+                    }
+                });
+            }
+        }).start();
     }
 
     private JSONObject buildJson(List<RiskEngine.Check> checks, int score) {
@@ -978,16 +1188,22 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (SecurityException ignored) {
         }
-        if (best != null) {
+        long age = best == null ? Long.MAX_VALUE
+                : System.currentTimeMillis() - best.getTime();
+        if (best != null && age <= 120000) {
             applyLocation(best, asHome);
-        } else {
-            toast("測位中です。少し待って再度お試しください");
+            return;
         }
+        toast("測位中です");
+        final boolean[] applied = {false};
         try {
             lm.requestSingleUpdate(LocationManager.GPS_PROVIDER, new LocationListener() {
                 @Override
                 public void onLocationChanged(Location location) {
-                    applyLocation(location, asHome);
+                    if (!applied[0]) {
+                        applied[0] = true;
+                        applyLocation(location, asHome);
+                    }
                 }
 
                 @Override
@@ -1002,7 +1218,12 @@ public class MainActivity extends AppCompatActivity {
                 public void onProviderDisabled(String provider) {
                 }
             }, getMainLooper());
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            if (best != null) {
+                applyLocation(best, asHome);
+            } else {
+                toast("測位できませんでした。位置情報を確認してください");
+            }
         }
     }
 
@@ -1041,8 +1262,8 @@ public class MainActivity extends AppCompatActivity {
         }
         Store.saveArray(this, Store.F_LOCATION, log);
         toast(asHome ? "拠点を登録しました" : "現在地を記録しました");
-        if (current == 6) {
-            render(6);
+        if (current == 7) {
+            render(7);
         }
     }
 

@@ -99,6 +99,10 @@ public class DocClassifier {
     private static final Pattern P_TAG = Pattern.compile("<[^>]*>");
 
     public static Result scan(Context c, String treeUri) {
+        return scan(c, treeUri, null);
+    }
+
+    public static Result scan(Context c, String treeUri, java.util.Set<String> excluded) {
         Result r = new Result();
         if (treeUri == null || treeUri.isEmpty()) {
             r.error = "監視フォルダが未選択です";
@@ -110,7 +114,7 @@ public class DocClassifier {
                 r.error = "フォルダを読み取れません。再選択してください";
                 return r;
             }
-            walk(c, root, r, 0);
+            walk(c, root, r, 0, excluded);
             Collections.sort(r.docs, new Comparator<Doc>() {
                 @Override
                 public int compare(Doc a, Doc b) {
@@ -123,7 +127,8 @@ public class DocClassifier {
         return r;
     }
 
-    private static void walk(Context c, DocumentFile dir, Result r, int depth) {
+    private static void walk(Context c, DocumentFile dir, Result r, int depth,
+                             java.util.Set<String> excluded) {
         if (depth > 3 || r.scanned >= MAX_FILES) {
             return;
         }
@@ -136,7 +141,7 @@ public class DocClassifier {
                 return;
             }
             if (f.isDirectory()) {
-                walk(c, f, r, depth + 1);
+                walk(c, f, r, depth + 1, excluded);
                 continue;
             }
             String name = f.getName();
@@ -145,6 +150,9 @@ public class DocClassifier {
             }
             String ext = ext(name);
             if (!isTarget(ext)) {
+                continue;
+            }
+            if (excluded != null && excluded.contains(name)) {
                 continue;
             }
             if (f.length() > MAX_BYTES) {
@@ -399,6 +407,59 @@ public class DocClassifier {
             }
             i = b + 1;
         }
+        extractPdfHex(content, out);
+    }
+
+    private static void extractPdfHex(String content, StringBuilder out) {
+        Matcher m = Pattern.compile("<([0-9A-Fa-f\\s]{4,})>\\s*Tj").matcher(content);
+        while (m.find() && out.length() < MAX_TEXT) {
+            String hex = m.group(1).replaceAll("\\s", "");
+            if (hex.length() % 2 != 0) {
+                continue;
+            }
+            try {
+                if (hex.length() % 4 == 0) {
+                    StringBuilder u = new StringBuilder();
+                    boolean plausible = true;
+                    for (int i = 0; i + 4 <= hex.length(); i += 4) {
+                        int cp = Integer.parseInt(hex.substring(i, i + 4), 16);
+                        if (cp == 0) {
+                            plausible = false;
+                            break;
+                        }
+                        u.append((char) cp);
+                    }
+                    if (plausible && hasReadable(u)) {
+                        out.append(u).append(' ');
+                        continue;
+                    }
+                }
+                StringBuilder a = new StringBuilder();
+                for (int i = 0; i + 2 <= hex.length(); i += 2) {
+                    int b = Integer.parseInt(hex.substring(i, i + 2), 16);
+                    if (b >= 32 && b < 127) {
+                        a.append((char) b);
+                    }
+                }
+                if (hasReadable(a)) {
+                    out.append(a).append(' ');
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static boolean hasReadable(CharSequence s) {
+        int good = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            boolean jp = (c >= 0x3040 && c <= 0x30FF) || (c >= 0x4E00 && c <= 0x9FFF);
+            boolean ascii = c >= 32 && c < 127;
+            if (jp || ascii) {
+                good++;
+            }
+        }
+        return s.length() >= 2 && good * 10 >= s.length() * 7;
     }
 
     public static boolean applyLabel(Context c, Doc d) {

@@ -22,6 +22,8 @@
 | `FileScanner.java` | SAF経由のダウンロード監視（危険/二重/暗号化拡張子） |
 | `DocClassifier.java` | Office/PDF/テキストの本文抽出と機密度分類・ラベル付与 |
 | `DeskInspector.java` | 撮影画像のOCRによる机上放置書類の検出 |
+| `AppAuditor.java` | インストール済みアプリの危険権限棚卸し |
+| `DailyWorker.java` | WorkManagerによる日次チェック・通知・スコア履歴 |
 | `RiskEngine.java` | ルールベース推論・重み付けスコア・改善提案 |
 | `Store.java` | JSON永続化 |
 
@@ -36,6 +38,7 @@
 | 機密情報 | 4. AI機密情報分類 |
 | ネットワーク | 7. AIネットワーク管理 |
 | 物理・外出 | 6. AI外出管理 |
+| アプリ | 1. 資産管理（アプリ棚卸し） |
 | 書類点検 | 5. AI物理セキュリティ |
 | AI分析 | 8. AI統合分析 |
 
@@ -46,8 +49,8 @@
 
 ## 未実装（次バージョン候補）
 
-- v1.4: 定期実行（WorkManager）とバックグラウンド位置ログ
-- v1.5: Google Drive 自動送信（現状は SAF の書き出しで代替）
+- v1.6: Google Drive 自動送信（現状は SAF の書き出しで代替）
+- v1.6: バックグラウンド位置ログ
 - v2.0: 管理者アプリ側（統合ダッシュボード）、BonsaiApp 連携によるローカルLLM推論
 
 ## 機密情報分類の仕組み（v1.2）
@@ -65,6 +68,22 @@
 - 撮影は `ACTION_IMAGE_CAPTURE` 相当（`ActivityResultContracts.TakePicture`）＋ FileProvider（`${applicationId}.fileprovider` / `cache/captures`）。CAMERA権限は宣言していないため権限要求は発生しない。
 - 画像は端末内で処理し保存も送信もしない。`inspections.json` には判定結果のみ最大100件を記録。
 - リスクエンジンは「最終点検が7日以内」かつ「機密相当が未検出」を満たす場合のみOKとする（weight 12）。
+
+## v1.4/v1.5 の変更
+
+**バグ修正 (v1.4)**
+- 感染予防スキャンを全て別スレッド化（`ensureScan()`）。UIスレッドでのSAF走査を撤廃
+- 位置取得を「2分以内のlastKnownがあれば即適用、なければ単発測位のみ」に変更し、二重記録と拠点の上書きを解消
+- `captureUri` を `onSaveInstanceState` で退避（撮影中のプロセス死対応）
+- 文書解析の連打ガード（`analyzing` フラグ）
+- PDF抽出に16進文字列 `<...>Tj` の復号を追加（UTF-16BE→可読判定→ASCIIフォールバック）。ToUnicode CMapは未対応のため CID埋め込みPDFは依然ファイル名判定
+
+**機能追加 (v1.5)**
+- アプリタブ: 危険権限（SMS/アクセシビリティ/重ね描き等）の重み付き棚卸し。スコア5以上を高リスクとしてリスクエンジンに反映（QUERY_ALL_PACKAGES 使用）
+- Wi-Fi暗号化判定: API 31+ で `getCurrentSecurityType`。オープン/WEPは減点15
+- 機密分類の除外リスト: 文書カードの「誤検知として除外」→ prefs の StringSet。解析時にスキップ
+- スコア履歴: `history.json` に日次で最大90件。AI分析タブに14日分の横棒グラフ
+- WorkManager 24時間周期の `DailyWorker`: バックグラウンドでスキャン→履歴追記→「暗号化拡張子検出 / スコア60未満 / 10以上の低下」で通知
 
 ## 注意
 

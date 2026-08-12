@@ -40,8 +40,15 @@ public class RiskEngine {
     public static final String C_PHYSICAL = "物理";
     public static final String C_DATA = "情報資産";
 
+    public static final String C_APPS = "アプリ";
+
     public static List<Check> run(Context c, JSONArray accounts, FileScanner.Result files,
                                   DocClassifier.Result docs) {
+        return run(c, accounts, files, docs, null);
+    }
+
+    public static List<Check> run(Context c, JSONArray accounts, FileScanner.Result files,
+                                  DocClassifier.Result docs, AppAuditor.Result apps) {
         List<Check> l = new ArrayList<>();
 
         // --- 資産 / 脆弱性 ---
@@ -158,7 +165,26 @@ public class RiskEngine {
                     "機密情報タブで解析を実行する"));
         }
 
+        // --- アプリ ---
+        if (apps != null && apps.total > 0) {
+            l.add(new Check(C_APPS, "危険権限アプリ", apps.flagged == 0, 12,
+                    apps.flagged == 0
+                            ? "高リスク権限の組み合わせを持つアプリはありません"
+                            : apps.flagged + " 件が高リスク権限（SMS/アクセシビリティ等）を保有",
+                    "心当たりのないアプリはアンインストールし、権限を見直す"));
+        }
+
         // --- ネットワーク ---
+        String sec = Collector.wifiSecurity(c);
+        if ("オープン(暗号化なし)".equals(sec) || "WEP".equals(sec)) {
+            l.add(new Check(C_NETWORK, "Wi-Fi暗号化", false, 15,
+                    "接続中のWi-Fiは " + sec + " です",
+                    "WPA2/WPA3のアクセスポイントへ切り替える"));
+        } else if (sec != null) {
+            l.add(new Check(C_NETWORK, "Wi-Fi暗号化", true, 15,
+                    sec, ""));
+        }
+
         boolean wifi = Collector.isWifi(c);
         boolean vpn = Collector.vpnActive(c);
         l.add(new Check(C_NETWORK, "VPN", !wifi || vpn, 10,
