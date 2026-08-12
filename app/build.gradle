@@ -10,13 +10,26 @@ android {
         applicationId "jp.appathy.sechq"
         minSdk 24
         targetSdk 34
-        versionCode 5
-        versionName "1.5"
+        versionCode 6
+        versionName "1.6"
+    }
+
+    signingConfigs {
+        fixed {
+            storeFile file('sechq.keystore')
+            storePassword 'sechqpass'
+            keyAlias 'sechq'
+            keyPassword 'sechqpass'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.fixed
         }
     }
 

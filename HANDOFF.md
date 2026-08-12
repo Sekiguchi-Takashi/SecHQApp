@@ -85,6 +85,10 @@
 - スコア履歴: `history.json` に日次で最大90件。AI分析タブに14日分の横棒グラフ
 - WorkManager 24時間周期の `DailyWorker`: バックグラウンドでスキャン→履歴追記→「暗号化拡張子検出 / スコア60未満 / 10以上の低下」で通知
 
+## 署名（v1.6〜）
+
+`app/sechq.keystore`（alias: sechq / pass: sechqpass）を debug/release 両方の signingConfig に固定。CIランナー任せのdebug署名だと毎回変わり上書きインストール不可になるための措置。**このキーストアを削除・再生成すると既存端末は再びアンインストールが必要になる**ので変更しないこと。
+
 ## 注意
 
 - SSID取得には位置情報の許可と位置情報ONが必要。
