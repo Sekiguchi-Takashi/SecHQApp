@@ -123,7 +123,11 @@
 - photo: 通知→タップで撮影→OCR判定を desk_<ID>_<ts>.json で返送 / location: loc_<ID>_<ts>.json / 許可外SSID検知: alert_<ID>_<ts>.json＋本人へ通知（Android仕様で強制切断は不可のため検知・警告方式）
 - 退社: status退社を送信しサービス停止
 
-**管理者モード**: 従来の11タブUI。コマンド発行UI（cmd_*.json生成）は管理者モードの仕様説明を受けて実装予定。
+**管理者モード（v2.2）**: タブ12（ホーム/統制/…）。`統制`タブが管理者ダッシュボード。
+- **受信一覧**: 共有フォルダの status_/sechq_/desk_/loc_/alert_ を読み、時刻降順の履歴と端末別サマリを表示（`AdminHub.load`）。
+- **指示**: 端末カードをタップ or「全端末へ指示」→ メッセージ/撮影指示/位置取得/許可Wi-Fi配布。`cmd_<ID>.json`（全体は`cmd_all.json`）を生成。出社前の端末には出社時に届く（clockInで `cmd_done_ts` を0にリセットし、未処理コマンドを必ず拾う）。
+- **集計**: ①対象台数（`expected_devices`）に達したら自動集計 ②「今すぐ集計」で手動 ③`NightlyWorker` が毎日23時に自動集計（当日集計済みならスキップ、データがある場合のみ）。結果は `summary_YYYY-MM-DD.json`。
+- **競合制御**: `admin_lock.json` に owner+ts を書く。他端末が保持中（TTL 10分）なら管理者機能を全面停止し、統制タブでロックアウト表示＋ログアウトのみ可能。`render()` はロック中に必ずindex=1へ強制。onResumeで再取得、onDestroy/ログアウトで解放。
 
 ## 注意
 

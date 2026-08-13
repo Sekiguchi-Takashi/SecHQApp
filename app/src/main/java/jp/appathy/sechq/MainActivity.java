@@ -58,8 +58,8 @@ public class MainActivity extends AppCompatActivity {
     static final int ACC = 0xFF58A6FF;
 
     static final String[] TABS = {
-            "ホーム", "資産", "脆弱性", "認証", "感染予防", "機密情報", "アプリ", "ネットワーク",
-            "物理・外出", "書類点検", "AI分析"
+            "ホーム", "統制", "資産", "脆弱性", "認証", "感染予防", "機密情報", "アプリ",
+            "ネットワーク", "物理・外出", "書類点検", "AI分析"
     };
 
     private FrameLayout content;
@@ -115,7 +115,7 @@ public class MainActivity extends AppCompatActivity {
                             Store.prefs(this).edit().putString("tree", uri.toString()).apply();
                             lastScan = null;
                             lastDocs = null;
-                            render(4);
+                            render(5);
                         }
                     }
                 });
@@ -256,11 +256,69 @@ public class MainActivity extends AppCompatActivity {
             tabBarView.setVisibility(View.GONE);
             headerSub.setText("クライアントモード（設定はタイトル長押し）");
             renderClient();
-        } else {
-            tabBarView.setVisibility(View.VISIBLE);
-            headerSub.setText("管理者モード — Appathy / SecHQ");
-            render(0);
+            return;
         }
+        tabBarView.setVisibility(View.VISIBLE);
+        headerSub.setText("管理者モード — Appathy / SecHQ");
+        NightlyWorker.schedule(this);
+        render(1);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final AdminHub.Lock l = AdminHub.acquire(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        adminLock = l;
+                        if (l.conflict) {
+                            tabBarView.setVisibility(View.GONE);
+                            headerSub.setText("管理者機能は停止中（他端末が使用中）");
+                            render(1);
+                        } else {
+                            loadInbox();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!isClientMode() && !Store.prefs(this).getString("mode", "").isEmpty()) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final AdminHub.Lock l = AdminHub.acquire(MainActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            boolean was = adminLock != null && adminLock.conflict;
+                            adminLock = l;
+                            if (l.conflict != was) {
+                                if (l.conflict) {
+                                    tabBarView.setVisibility(View.GONE);
+                                    headerSub.setText("管理者機能は停止中（他端末が使用中）");
+                                } else {
+                                    tabBarView.setVisibility(View.VISIBLE);
+                                    headerSub.setText("管理者モード — Appathy / SecHQ");
+                                }
+                                render(1);
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (!isClientMode() && adminLock != null && adminLock.mine) {
+            AdminHub.release(this);
+        }
+        super.onDestroy();
     }
 
     private void modeChooser() {
@@ -364,6 +422,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void render(int index) {
+        if (adminLock != null && adminLock.conflict) {
+            index = 1;
+        }
         current = index;
         styleTabs();
         content.removeAllViews();
@@ -376,30 +437,33 @@ public class MainActivity extends AppCompatActivity {
                 screenHome(body);
                 break;
             case 1:
-                screenAsset(body);
+                screenControl(body);
                 break;
             case 2:
-                screenVuln(body);
+                screenAsset(body);
                 break;
             case 3:
-                screenAuth(body);
+                screenVuln(body);
                 break;
             case 4:
-                screenFiles(body);
+                screenAuth(body);
                 break;
             case 5:
-                screenDocs(body);
+                screenFiles(body);
                 break;
             case 6:
-                screenApps(body);
+                screenDocs(body);
                 break;
             case 7:
-                screenNetwork(body);
+                screenApps(body);
                 break;
             case 8:
-                screenPhysical(body);
+                screenNetwork(body);
                 break;
             case 9:
+                screenPhysical(body);
+                break;
+            case 10:
                 screenDesk(body);
                 break;
             default:
@@ -492,7 +556,10 @@ public class MainActivity extends AppCompatActivity {
             settingsDialog();
             return;
         }
-        Store.prefs(this).edit().putBoolean("at_work", true).apply();
+        Store.prefs(this).edit()
+                .putBoolean("at_work", true)
+                .putLong("cmd_done_ts", 0)
+                .apply();
 
         // Wi-Fi ON (API 28以前は直接ON、29以降はパネル表示)
         if (Build.VERSION.SDK_INT < 29) {
@@ -583,6 +650,271 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) {
             toast("カメラを起動できませんでした");
         }
+    }
+
+    private AdminHub.Inbox inbox;
+    private boolean inboxLoading;
+    private AdminHub.Lock adminLock;
+
+    private void screenControl(LinearLayout v) {
+        v.addView(sectionTitle("統制ダッシュボード",
+                "クライアントからの受信履歴と指示の送信"));
+
+        if (adminLock != null && adminLock.conflict) {
+            LinearLayout lk = card();
+            TextView t = new TextView(this);
+            t.setText("⛔ 管理者機能は停止中です\n他の管理者端末が使用中: "
+                    + adminLock.owner + "\n取得時刻: " + adminLock.at);
+            t.setTextColor(BAD);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            lk.addView(t);
+            v.addView(lk);
+            v.addView(btn("ログアウト", vw -> adminLogout()));
+            v.addView(note("ログアウト以外の操作はできません。10分間更新のないロックは自動解放されます"));
+            return;
+        }
+
+        v.addView(btn("受信を更新", vw -> loadInbox()));
+        if (inboxLoading) {
+            v.addView(note("読み込み中…"));
+            return;
+        }
+        if (inbox == null) {
+            loadInbox();
+            v.addView(note("読み込み中…"));
+            return;
+        }
+        if (inbox.error != null) {
+            v.addView(note(inbox.error));
+            return;
+        }
+
+        AdminHub.Summary sm = AdminHub.aggregate(this, inbox);
+        LinearLayout s = card();
+        kv(s, "端末数", sm.devices + " 台");
+        kvColor(s, "出社中", sm.atWork + " 台", sm.atWork > 0 ? OK : SUB);
+        int expected = Store.prefs(this).getInt("expected_devices", 0);
+        kvColor(s, "レポート受信", sm.reported + " 台"
+                        + (expected > 0 ? " / 対象 " + expected + " 台" : " (対象台数 未設定)"),
+                sm.complete ? OK : WARN);
+        kvColor(s, "警告", sm.alerts + " 件", sm.alerts == 0 ? OK : BAD);
+        kv(s, "平均スコア", sm.avgScore < 0 ? "-" : String.valueOf(sm.avgScore));
+        String la = Store.prefs(this).getString("last_summary_at", "");
+        if (!la.isEmpty()) {
+            kv(s, "最終集計", la + " (" + Store.prefs(this)
+                    .getString("last_summary_trigger", "") + ")");
+        }
+        v.addView(s);
+
+        if (sm.complete && !Collector.today()
+                .equals(Store.prefs(this).getString("last_summary_date", ""))) {
+            AdminHub.saveSummary(this, sm, "全件到着による自動集計");
+            toast("全件到着したため自動集計しました");
+        }
+
+        v.addView(btn("今すぐ集計", vw -> {
+            AdminHub.Summary x = AdminHub.aggregate(this, inbox);
+            AdminHub.saveSummary(this, x, "手動");
+            toast("集計しました");
+            render(1);
+        }));
+        v.addView(btn("対象台数を設定", vw -> expectedDialog()));
+        v.addView(btn("全端末へ指示", vw -> commandDialog(null)));
+
+        LinearLayout dh = card();
+        TextView dt = new TextView(this);
+        dt.setText("端末一覧（タップで指示）");
+        dt.setTextColor(SUB);
+        dt.setTypeface(Typeface.DEFAULT_BOLD);
+        dh.addView(dt);
+        v.addView(dh);
+
+        for (final AdminHub.Device d : inbox.devices) {
+            LinearLayout l = card();
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            LinearLayout mid = new LinearLayout(this);
+            mid.setOrientation(LinearLayout.VERTICAL);
+            mid.setLayoutParams(new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView n = new TextView(this);
+            n.setText(d.id);
+            n.setTextColor(TEXT);
+            n.setTypeface(Typeface.DEFAULT_BOLD);
+            n.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            mid.addView(n);
+            TextView sub = new TextView(this);
+            sub.setText(d.lastAt + (d.ssid.isEmpty() ? "" : " / " + d.ssid)
+                    + " / 受信 " + d.events.size() + " 件");
+            sub.setTextColor(SUB);
+            sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            mid.addView(sub);
+            row.addView(mid);
+
+            TextView badge = new TextView(this);
+            badge.setText("出社".equals(d.state) ? "🟢 出社" : "⚪ " + d.state);
+            badge.setTextColor("出社".equals(d.state) ? OK : SUB);
+            badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            row.addView(badge);
+
+            l.addView(row);
+            if (d.score >= 0) {
+                kvColor(l, "スコア", String.valueOf(d.score),
+                        d.score >= 80 ? OK : (d.score >= 60 ? WARN : BAD));
+            }
+            l.setOnClickListener(vw -> commandDialog(d.id));
+            v.addView(l);
+        }
+
+        LinearLayout eh = card();
+        TextView et = new TextView(this);
+        et.setText("受信履歴（新しい順・最大50件）");
+        et.setTextColor(SUB);
+        et.setTypeface(Typeface.DEFAULT_BOLD);
+        eh.addView(et);
+        int shown = 0;
+        for (AdminHub.Event e : inbox.events) {
+            if (shown >= 50) {
+                break;
+            }
+            shown++;
+            TextView t = new TextView(this);
+            t.setText(e.at + "  [" + e.kind + "] " + e.device + "\n　" + e.summary);
+            t.setTextColor("警告".equals(e.kind) ? BAD : TEXT);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            t.setPadding(0, dp(6), 0, 0);
+            eh.addView(t);
+        }
+        if (shown == 0) {
+            eh.addView(note("受信はまだありません"));
+        }
+        v.addView(eh);
+    }
+
+    private void loadInbox() {
+        if (inboxLoading) {
+            return;
+        }
+        inboxLoading = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final AdminHub.Inbox in = AdminHub.load(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        inbox = in;
+                        inboxLoading = false;
+                        if (current == 1) {
+                            render(1);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void expectedDialog() {
+        final EditText ed = new EditText(this);
+        ed.setHint("対象端末の台数");
+        ed.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        int cur = Store.prefs(this).getInt("expected_devices", 0);
+        if (cur > 0) {
+            ed.setText(String.valueOf(cur));
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("対象台数（全件到着の判定に使用）")
+                .setView(ed)
+                .setPositiveButton("保存", (d, w) -> {
+                    try {
+                        Store.prefs(this).edit().putInt("expected_devices",
+                                Integer.parseInt(ed.getText().toString().trim())).apply();
+                    } catch (Exception ignored) {
+                    }
+                    render(1);
+                })
+                .setNegativeButton("キャンセル", null)
+                .show();
+    }
+
+    private void commandDialog(final String deviceId) {
+        final String label = deviceId == null ? "全端末" : deviceId;
+        new AlertDialog.Builder(this)
+                .setTitle(label + " へ指示")
+                .setItems(new String[]{
+                        "メッセージを送る", "机上の撮影を指示", "位置情報を取得",
+                        "許可Wi-Fiを配布"
+                }, (d, w) -> {
+                    if (w == 0) {
+                        textInputDialog("メッセージ", "内容を入力", msg ->
+                                dispatch(deviceId, AdminHub.messageAction(msg)));
+                    } else if (w == 1) {
+                        textInputDialog("撮影指示", "机上の書類を点検してください", msg ->
+                                dispatch(deviceId, AdminHub.photoAction(msg)));
+                    } else if (w == 2) {
+                        dispatch(deviceId, AdminHub.simpleAction("location"));
+                    } else {
+                        textInputDialog("許可SSID", "カンマ区切りで入力", msg -> {
+                            java.util.List<String> l = new java.util.ArrayList<>();
+                            for (String x : msg.split(",")) {
+                                String t = x.trim();
+                                if (!t.isEmpty()) {
+                                    l.add(t);
+                                }
+                            }
+                            dispatch(deviceId, AdminHub.wifiPolicyAction(l));
+                        });
+                    }
+                })
+                .show();
+    }
+
+    private interface TextCallback {
+        void onText(String s);
+    }
+
+    private void textInputDialog(String title, String hint, final TextCallback cb) {
+        final EditText ed = new EditText(this);
+        ed.setHint(hint);
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(ed)
+                .setPositiveButton("送信", (d, w) -> {
+                    String t = ed.getText().toString().trim();
+                    if (t.isEmpty()) {
+                        t = hint;
+                    }
+                    cb.onText(t);
+                })
+                .setNegativeButton("キャンセル", null)
+                .show();
+    }
+
+    private void dispatch(final String deviceId, final JSONObject action) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = AdminHub.sendCommand(MainActivity.this, deviceId, action);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        toast(ok ? "指示を送信しました（出社前なら出社時に届きます）"
+                                : "送信に失敗しました");
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void adminLogout() {
+        AdminHub.release(this);
+        Store.prefs(this).edit().remove("mode").apply();
+        adminLock = null;
+        inbox = null;
+        modeChooser();
     }
 
     private void screenHome(LinearLayout v) {
@@ -822,7 +1154,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
                 Store.saveArray(this, Store.F_ACCOUNTS, out);
-                render(3);
+                render(4);
             }));
             v.addView(c);
         }
@@ -872,7 +1204,7 @@ public class MainActivity extends AppCompatActivity {
                     } catch (Exception ignored) {
                     }
                     Store.saveArray(this, Store.F_ACCOUNTS, arr);
-                    render(3);
+                    render(4);
                 })
                 .setNegativeButton("キャンセル", null)
                 .show();
@@ -966,7 +1298,7 @@ public class MainActivity extends AppCompatActivity {
                 Store.prefs(this).edit()
                         .putStringSet("excluded", new java.util.HashSet<String>()).apply();
                 toast("除外リストを初期化しました");
-                render(5);
+                render(6);
             }));
         }
 
@@ -1104,8 +1436,8 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void run() {
                             lastAudit = r;
-                            if (current == 6) {
-                                render(6);
+                            if (current == 7) {
+                                render(7);
                             }
                         }
                     });
@@ -1177,8 +1509,8 @@ public class MainActivity extends AppCompatActivity {
                     public void run() {
                         lastDocs = r;
                         analyzing = false;
-                        if (current == 5) {
-                            render(5);
+                        if (current == 6) {
+                            render(6);
                         }
                     }
                 });
@@ -1287,7 +1619,7 @@ public class MainActivity extends AppCompatActivity {
         j.addView(t);
         v.addView(j);
 
-        v.addView(btn("再取得", vw -> render(7)));
+        v.addView(btn("再取得", vw -> render(8)));
     }
 
     private void screenPhysical(LinearLayout v) {
@@ -1443,8 +1775,8 @@ public class MainActivity extends AppCompatActivity {
             }
             if (isClientMode()) {
                 renderClient();
-            } else if (current == 9) {
-                render(9);
+            } else if (current == 10) {
+                render(10);
             }
         });
     }
@@ -1741,8 +2073,8 @@ public class MainActivity extends AppCompatActivity {
         }
         Store.saveArray(this, Store.F_LOCATION, log);
         toast(asHome ? "拠点を登録しました" : "現在地を記録しました");
-        if (current == 8) {
-            render(8);
+        if (current == 9) {
+            render(9);
         }
     }
 
