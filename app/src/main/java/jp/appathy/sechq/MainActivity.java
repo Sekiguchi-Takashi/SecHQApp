@@ -63,6 +63,8 @@ public class MainActivity extends AppCompatActivity {
     };
 
     private FrameLayout content;
+    private View tabBarView;
+    private TextView headerSub;
     private final List<TextView> tabViews = new ArrayList<>();
     private int current = 0;
 
@@ -183,7 +185,8 @@ public class MainActivity extends AppCompatActivity {
         root.setBackgroundColor(BG);
 
         root.addView(buildHeader());
-        root.addView(buildTabBar());
+        tabBarView = buildTabBar();
+        root.addView(tabBarView);
 
         content = new FrameLayout(this);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -212,7 +215,85 @@ public class MainActivity extends AppCompatActivity {
             }
         }).start();
         autoRecordLocation();
-        render(0);
+
+        String mode = Store.prefs(this).getString("mode", "");
+        if (mode.isEmpty()) {
+            modeChooser();
+        } else {
+            applyMode();
+        }
+        handleAction(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleAction(intent);
+    }
+
+    private void handleAction(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        String a = intent.getStringExtra("action");
+        if (a == null) {
+            return;
+        }
+        intent.removeExtra("action");
+        if ("photo".equals(a)) {
+            startDeskCaptureForAdmin();
+        } else if ("wifi".equals(a)) {
+            openWifiPanel();
+        }
+    }
+
+    private boolean isClientMode() {
+        return "client".equals(Store.prefs(this).getString("mode", ""));
+    }
+
+    private void applyMode() {
+        if (isClientMode()) {
+            tabBarView.setVisibility(View.GONE);
+            headerSub.setText("クライアントモード（設定はタイトル長押し）");
+            renderClient();
+        } else {
+            tabBarView.setVisibility(View.VISIBLE);
+            headerSub.setText("管理者モード — Appathy / SecHQ");
+            render(0);
+        }
+    }
+
+    private void modeChooser() {
+        new AlertDialog.Builder(this)
+                .setTitle("モードを選択")
+                .setCancelable(false)
+                .setItems(new String[]{"クライアント（社員端末）", "管理者"}, (d, w) -> {
+                    Store.prefs(this).edit()
+                            .putString("mode", w == 0 ? "client" : "admin").apply();
+                    applyMode();
+                })
+                .show();
+    }
+
+    private void settingsDialog() {
+        String tree = Store.prefs(this).getString("export_tree", "");
+        new AlertDialog.Builder(this)
+                .setTitle("設定")
+                .setItems(new String[]{
+                        "共有フォルダを選択" + (tree.isEmpty() ? " (未設定)" : " (設定済み)"),
+                        "モードを切り替え",
+                }, (d, w) -> {
+                    if (w == 0) {
+                        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                        exportTreeLauncher.launch(i);
+                    } else {
+                        modeChooser();
+                    }
+                })
+                .show();
     }
 
     // ---------------- shell ----------------
@@ -235,6 +316,11 @@ public class MainActivity extends AppCompatActivity {
         s.setTextColor(SUB);
         s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         h.addView(s);
+        headerSub = s;
+        h.setOnLongClickListener(vw -> {
+            settingsDialog();
+            return true;
+        });
         return h;
     }
 
@@ -325,6 +411,179 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ---------------- screens ----------------
+
+    private void renderClient() {
+        content.removeAllViews();
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+        LinearLayout body = col();
+        body.setGravity(Gravity.CENTER);
+
+        boolean atWork = Store.prefs(this).getBoolean("at_work", false);
+        String tree = Store.prefs(this).getString("export_tree", "");
+
+        TextView st = new TextView(this);
+        st.setText(atWork ? "🟢 出社中" : "⚪ 退社中");
+        st.setTextColor(atWork ? OK : SUB);
+        st.setTypeface(Typeface.DEFAULT_BOLD);
+        st.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        st.setGravity(Gravity.CENTER);
+        st.setPadding(0, dp(8), 0, dp(20));
+        body.addView(st);
+
+        Button in = bigButton("出社", OK);
+        in.setEnabled(!atWork);
+        in.setAlpha(atWork ? 0.4f : 1f);
+        in.setOnClickListener(vw -> clockIn());
+        body.addView(in);
+
+        Button out = bigButton("退社", BAD);
+        out.setEnabled(atWork);
+        out.setAlpha(atWork ? 1f : 0.4f);
+        out.setOnClickListener(vw -> clockOut());
+        body.addView(out);
+
+        if (tree.isEmpty()) {
+            TextView warn = new TextView(this);
+            warn.setText("共有フォルダが未設定です。タイトルを長押しして設定してください");
+            warn.setTextColor(WARN);
+            warn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            warn.setGravity(Gravity.CENTER);
+            warn.setPadding(0, dp(16), 0, 0);
+            body.addView(warn);
+        } else if (atWork) {
+            TextView info = new TextView(this);
+            info.setText("管理者からの指示を待機中です\n（約5分間隔で確認）");
+            info.setTextColor(SUB);
+            info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            info.setGravity(Gravity.CENTER);
+            info.setPadding(0, dp(16), 0, 0);
+            body.addView(info);
+        }
+
+        sv.addView(body);
+        content.addView(sv);
+    }
+
+    private Button bigButton(String label, int color) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextColor(0xFF0E1116);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(18));
+        b.setBackground(g);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(96));
+        p.bottomMargin = dp(16);
+        p.leftMargin = dp(10);
+        p.rightMargin = dp(10);
+        b.setLayoutParams(p);
+        return b;
+    }
+
+    private void clockIn() {
+        String tree = Store.prefs(this).getString("export_tree", "");
+        if (tree.isEmpty()) {
+            toast("先に共有フォルダを設定してください（タイトル長押し）");
+            settingsDialog();
+            return;
+        }
+        Store.prefs(this).edit().putBoolean("at_work", true).apply();
+
+        // Wi-Fi ON (API 28以前は直接ON、29以降はパネル表示)
+        if (Build.VERSION.SDK_INT < 29) {
+            try {
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                        getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null && !wm.isWifiEnabled()) {
+                    wm.setWifiEnabled(true);
+                }
+            } catch (Exception ignored) {
+            }
+        } else if (!Collector.isWifi(this)) {
+            openWifiPanel();
+        }
+
+        // 状態＋統合レポートを転送してサービス開始
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                ClientService.writeStatus(MainActivity.this, "出社");
+                List<RiskEngine.Check> checks = allChecks();
+                int score = RiskEngine.score(checks);
+                Exporter.writeToExportTree(MainActivity.this, Exporter.exportName(),
+                        pretty(buildJson(checks, score)));
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        toast("出社を記録し、レポートを送信しました");
+                    }
+                });
+            }
+        }).start();
+
+        Intent i = new Intent(this, ClientService.class);
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(i);
+        } else {
+            startService(i);
+        }
+        renderClient();
+    }
+
+    private void clockOut() {
+        Store.prefs(this).edit().putBoolean("at_work", false).apply();
+        stopService(new Intent(this, ClientService.class));
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                ClientService.writeStatus(MainActivity.this, "退社");
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        toast("退社を記録しました");
+                    }
+                });
+            }
+        }).start();
+        renderClient();
+    }
+
+    private void openWifiPanel() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startActivity(new Intent(android.provider.Settings.Panel.ACTION_WIFI));
+            } else {
+                startActivity(new Intent(android.provider.Settings.ACTION_WIFI_SETTINGS));
+            }
+        } catch (Exception e) {
+            toast("Wi-Fi設定を開けませんでした");
+        }
+    }
+
+    private void startDeskCaptureForAdmin() {
+        String msg = Store.prefs(this).getString("pending_photo", "");
+        if (!msg.isEmpty()) {
+            toast(msg);
+        }
+        Store.prefs(this).edit().putBoolean("photo_for_admin", true).apply();
+        try {
+            java.io.File dir = new java.io.File(getCacheDir(), "captures");
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            java.io.File f = new java.io.File(dir, "desk.jpg");
+            captureUri = androidx.core.content.FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", f);
+            cameraLauncher.launch(captureUri);
+        } catch (Exception e) {
+            toast("カメラを起動できませんでした");
+        }
+    }
 
     private void screenHome(LinearLayout v) {
         v.addView(sectionTitle("サイバー攻撃への備え",
@@ -1175,10 +1434,58 @@ public class MainActivity extends AppCompatActivity {
             if (r.error == null) {
                 DeskInspector.record(this, r);
             }
-            if (current == 9) {
+            boolean forAdmin = Store.prefs(this).getBoolean("photo_for_admin", false);
+            if (forAdmin) {
+                Store.prefs(this).edit()
+                        .putBoolean("photo_for_admin", false)
+                        .remove("pending_photo").apply();
+                uploadInspection(r);
+            }
+            if (isClientMode()) {
+                renderClient();
+            } else if (current == 9) {
                 render(9);
             }
         });
+    }
+
+    private void uploadInspection(final DeskInspector.Result r) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    JSONObject o = new JSONObject();
+                    o.put("端末", Exporter.deviceId());
+                    o.put("日時", Collector.now());
+                    if (r.error != null) {
+                        o.put("結果", r.error);
+                    } else {
+                        o.put("判定", r.label);
+                        o.put("スコア", r.score);
+                        o.put("認識行数", r.lines);
+                        JSONArray h = new JSONArray();
+                        if (r.hits != null) {
+                            for (String x : r.hits) {
+                                h.put(x);
+                            }
+                        }
+                        o.put("根拠", h);
+                    }
+                    final boolean ok = Exporter.writeToExportTree(MainActivity.this,
+                            "desk_" + Exporter.deviceId() + "_"
+                                    + System.currentTimeMillis() + ".json",
+                            Exporter.pretty(o));
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            toast(ok ? "点検結果を管理者へ送信しました"
+                                    : "送信に失敗しました");
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+            }
+        }).start();
     }
 
     private void screenAi(LinearLayout v) {

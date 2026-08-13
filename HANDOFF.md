@@ -112,6 +112,19 @@
 - **ダッシュボード**: 台数/レポート数/平均スコア、💣️ランサム痕跡端末数、⏳7日以上未報告端末数。端末カード（スコア低い順）→タップでカテゴリ別・NG項目と対策・スコア推移。
 - 依存は appcompat + documentfile のみ。ML Kit/WorkManagerは入れない。
 
+## モード切替（v2.1）
+
+`prefs.mode` = client / admin。初回起動でダイアログ選択、タイトル長押しの設定メニューで切替と共有フォルダ選択。今後「切替可能アプリ」と「クライアント専用アプリ」の2アプリに分割予定（まず切替可能アプリを完成させる方針）。
+
+**クライアントモード**: トップは出社/退社の2ボタンのみ（タブ非表示）。
+- 出社: ①API28以前はWi-Fi自動ON、29以降は未接続時にWi-Fiパネルを自動表示 ②status_<ID>.json（状態/SSID/VPN）と統合レポート sechq_<ID>_日付.json を共有フォルダへ送信 ③`ClientService`（location型フォアグラウンドサービス）開始
+- ClientService: 5分間隔で (a)status更新 (b)Wi-Fiポリシー照合 (c)cmd_<ID>.json / cmd_all.json をポーリング
+- コマンド書式: `{"ts": <epoch>, "actions": [{"type":"photo","msg":"…"} | {"type":"location"} | {"type":"wifi_policy","allowed":["SSID1"]} | {"type":"message","msg":"…"}]}`。tsが前回処理値以下なら無視（cmd_done_ts）
+- photo: 通知→タップで撮影→OCR判定を desk_<ID>_<ts>.json で返送 / location: loc_<ID>_<ts>.json / 許可外SSID検知: alert_<ID>_<ts>.json＋本人へ通知（Android仕様で強制切断は不可のため検知・警告方式）
+- 退社: status退社を送信しサービス停止
+
+**管理者モード**: 従来の11タブUI。コマンド発行UI（cmd_*.json生成）は管理者モードの仕様説明を受けて実装予定。
+
 ## 注意
 
 - SSID取得には位置情報の許可と位置情報ONが必要。
