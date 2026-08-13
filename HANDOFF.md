@@ -50,8 +50,7 @@
 
 ## 未実装（次バージョン候補）
 
-- v1.6: Google Drive 自動送信（現状は SAF の書き出しで代替）
-- v1.6: バックグラウンド位置ログ
+（クライアント側は完了。以降は改善のみ）
 - v2.0: 管理者アプリ側（統合ダッシュボード）、BonsaiApp 連携によるローカルLLM推論
 
 ## 機密情報分類の仕組み（v1.2）
@@ -98,6 +97,20 @@
 - ✅️要確認 = 未実施の点検あり（スキャン/棚卸し/書類点検/拠点登録など）
 - 🔐安全 = 全てOK
 で分類。タップでダイアログ（手口・端末の状態・今すぐできる対策）。起動時に感染予防スキャンとアプリ棚卸しを自動でバックグラウンド実行し、完了次第ホームを再描画する。タブは11（ホーム＋機能10）。
+
+## 自動エクスポートと位置自動記録（v1.8）
+
+- **自動エクスポート**: AI分析タブで SAF の `ACTION_OPEN_DOCUMENT_TREE` により書込可フォルダ（Google Driveのフォルダ可）を `export_tree` として永続化。`Exporter.writeToExportTree` が `sechq_YYYY-MM-DD.json` を同名上書きで保存。手動ボタンに加え `DailyWorker` の日次実行でも自動保存する。OAuth不要（Driveアプリのdocument provider経由で同期される）。
+- **位置自動記録**: 起動時に拠点登録済み＋位置権限ありの場合のみ、10分以内の lastKnownLocation を無音で履歴に記録（`auto: true`）。ACCESS_BACKGROUND_LOCATION は使わない方針（審査・許諾が重いため）。
+- `Exporter.java` に統合JSON生成を集約（MainActivity/DailyWorker共用）。JSONにスコア履歴も含む。
+
+## 管理者アプリ（v2.0 / :admin モジュール）
+
+1リポジトリ2アプリ構成。`admin/` に `jp.appathy.sechq.admin`（SecHQ 管理者）。CIは両モジュールをビルドし、`SecHQApp-debug-apk` と `SecHQAdmin-debug-apk` の2つのartifactを出す。署名はクライアントと同じ `app/sechq.keystore` を相対参照。
+
+- **データフロー**: 各端末がDrive共有フォルダへ `sechq_<端末ID>_YYYY-MM-DD.json` を日次エクスポート（v1.9でファイル名に端末IDを追加。旧形式 `sechq_日付.json` も資産.モデルで救済）→ 管理者アプリがそのフォルダをSAFで読み、`Fleet.load` が端末IDごとに最新レポートを採用。
+- **ダッシュボード**: 台数/レポート数/平均スコア、💣️ランサム痕跡端末数、⏳7日以上未報告端末数。端末カード（スコア低い順）→タップでカテゴリ別・NG項目と対策・スコア推移。
+- 依存は appcompat + documentfile のみ。ML Kit/WorkManagerは入れない。
 
 ## 注意
 

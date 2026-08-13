@@ -3,20 +3,20 @@ plugins {
 }
 
 android {
-    namespace 'jp.appathy.sechq'
+    namespace 'jp.appathy.sechq.admin'
     compileSdk 34
 
     defaultConfig {
-        applicationId "jp.appathy.sechq"
+        applicationId "jp.appathy.sechq.admin"
         minSdk 24
         targetSdk 34
-        versionCode 9
-        versionName "1.9"
+        versionCode 1
+        versionName "2.0"
     }
 
     signingConfigs {
         fixed {
-            storeFile file('sechq.keystore')
+            storeFile file('../app/sechq.keystore')
             storePassword 'sechqpass'
             keyAlias 'sechq'
             keyPassword 'sechqpass'
@@ -55,8 +55,5 @@ configurations.configureEach {
 dependencies {
     implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
     implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.documentfile:documentfile:1.0.1'
-    implementation 'com.google.mlkit:text-recognition-japanese:16.0.0'
-    implementation 'androidx.work:work-runtime:2.9.1'
 }

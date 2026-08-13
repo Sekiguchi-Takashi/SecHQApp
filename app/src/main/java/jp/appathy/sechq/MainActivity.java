@@ -67,6 +67,7 @@ public class MainActivity extends AppCompatActivity {
     private int current = 0;
 
     private ActivityResultLauncher<Intent> treeLauncher;
+    private ActivityResultLauncher<Intent> exportTreeLauncher;
     private ActivityResultLauncher<Intent> saveLauncher;
     private ActivityResultLauncher<String[]> permLauncher;
     private String pendingSaveBody = "";
@@ -113,6 +114,26 @@ public class MainActivity extends AppCompatActivity {
                             lastScan = null;
                             lastDocs = null;
                             render(4);
+                        }
+                    }
+                });
+
+        exportTreeLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                result -> {
+                    if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                        Uri uri = result.getData().getData();
+                        if (uri != null) {
+                            try {
+                                getContentResolver().takePersistableUriPermission(uri,
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                            } catch (Exception ignored) {
+                            }
+                            Store.prefs(this).edit()
+                                    .putString("export_tree", uri.toString()).apply();
+                            toast("エクスポート先を設定しました");
+                            render(current);
                         }
                     }
                 });
@@ -190,6 +211,7 @@ public class MainActivity extends AppCompatActivity {
                 });
             }
         }).start();
+        autoRecordLocation();
         render(0);
     }
 
@@ -1216,6 +1238,42 @@ public class MainActivity extends AppCompatActivity {
         }));
         v.addView(btn("統合JSONを書き出す", vw ->
                 saveJson("sechq_" + Collector.today() + ".json", pretty(buildJson(checks, s)))));
+
+        String et = Store.prefs(this).getString("export_tree", "");
+        LinearLayout ex = card();
+        kv(ex, "自動エクスポート先", et.isEmpty() ? "未設定" : Uri.decode(et));
+        String last = Store.prefs(this).getString("export_last", "");
+        if (!last.isEmpty()) {
+            kv(ex, "最終エクスポート", last);
+        }
+        v.addView(ex);
+        v.addView(btn("自動エクスポート先を選択 (Driveフォルダ可)", vw -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            exportTreeLauncher.launch(i);
+        }));
+        if (!et.isEmpty()) {
+            v.addView(btn("今すぐエクスポート先へ保存", vw -> {
+                final String body = pretty(buildJson(allChecks(), RiskEngine.score(allChecks())));
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        final boolean ok = Exporter.writeToExportTree(MainActivity.this,
+                                Exporter.exportName(), body);
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                toast(ok ? "保存しました（Driveなら自動同期されます）"
+                                        : "保存に失敗しました。フォルダを再選択してください");
+                            }
+                        });
+                    }
+                }).start();
+            }));
+            v.addView(note("日次バックグラウンドチェックでも同じ場所へ自動保存されます"));
+        }
     }
 
     // ---------------- logic helpers ----------------
@@ -1254,60 +1312,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private JSONObject buildJson(List<RiskEngine.Check> checks, int score) {
-        JSONObject o = new JSONObject();
-        try {
-            o.put("生成日時", Collector.now());
-            o.put("総合スコア", score);
-            o.put("評価", RiskEngine.rank(score));
-            o.put("資産", Collector.toJson(Collector.asset(this)));
-            o.put("ネットワーク", Collector.toJson(Collector.network(this)));
-            o.put("アカウント", Store.loadArray(this, Store.F_ACCOUNTS));
-            JSONObject insp = DeskInspector.latest(this);
-            if (insp != null) {
-                o.put("直近の書類点検", insp);
-            }
-            JSONArray ca = new JSONArray();
-            for (RiskEngine.Check c : checks) {
-                JSONObject x = new JSONObject();
-                x.put("分類", c.category);
-                x.put("項目", c.title);
-                x.put("判定", c.ok ? "OK" : "NG");
-                x.put("重み", c.weight);
-                x.put("詳細", c.detail);
-                if (!c.ok) {
-                    x.put("提案", c.advice);
-                }
-                ca.put(x);
-            }
-            o.put("判定結果", ca);
-            if (lastDocs != null && lastDocs.error == null && lastDocs.scanned > 0) {
-                JSONArray da = new JSONArray();
-                for (DocClassifier.Doc d : lastDocs.docs) {
-                    if (DocClassifier.L_PUBLIC.equals(d.label)) {
-                        continue;
-                    }
-                    JSONObject x = new JSONObject();
-                    x.put("ファイル名", d.name);
-                    x.put("種別", d.type);
-                    x.put("ラベル", d.label);
-                    x.put("スコア", d.score);
-                    x.put("根拠", new JSONArray(d.hits));
-                    da.put(x);
-                }
-                JSONObject doc = new JSONObject();
-                doc.put("解析件数", lastDocs.scanned);
-                doc.put("機密相当", lastDocs.sensitive());
-                doc.put("一覧", da);
-                o.put("機密情報分類", doc);
-            }
-            JSONObject cat = new JSONObject();
-            for (Map.Entry<String, Integer> e : RiskEngine.byCategory(checks).entrySet()) {
-                cat.put(e.getKey(), e.getValue());
-            }
-            o.put("カテゴリ別スコア", cat);
-        } catch (Exception ignored) {
-        }
-        return o;
+        return Exporter.buildJson(this, checks, score, lastDocs);
     }
 
     private String buildPrompt(List<RiskEngine.Check> checks, int score) {
@@ -1321,11 +1326,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String pretty(JSONObject o) {
-        try {
-            return o.toString(2);
-        } catch (Exception e) {
-            return o.toString();
-        }
+        return Exporter.pretty(o);
     }
 
     private void saveJson(String name, String body) {
@@ -1436,6 +1437,67 @@ public class MainActivity extends AppCompatActivity {
         if (current == 8) {
             render(8);
         }
+    }
+
+    private void autoRecordLocation() {
+        try {
+            if (!Store.prefs(this).contains("home_lat")) {
+                return;
+            }
+            if (ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+            LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (lm == null) {
+                return;
+            }
+            Location best = null;
+            for (String p : lm.getProviders(true)) {
+                Location l = lm.getLastKnownLocation(p);
+                if (l != null && (best == null || l.getTime() > best.getTime())) {
+                    best = l;
+                }
+            }
+            if (best != null
+                    && System.currentTimeMillis() - best.getTime() <= 600000) {
+                applyLocationSilent(best);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void applyLocationSilent(Location l) {
+        SharedPreferences p = Store.prefs(this);
+        SharedPreferences.Editor e = p.edit();
+        e.putFloat("last_lat", (float) l.getLatitude());
+        e.putFloat("last_lng", (float) l.getLongitude());
+        e.putString("last_at", Collector.now());
+        e.apply();
+        int dist = 0;
+        if (p.contains("home_lat")) {
+            float[] r = new float[1];
+            Location.distanceBetween(p.getFloat("home_lat", 0), p.getFloat("home_lng", 0),
+                    l.getLatitude(), l.getLongitude(), r);
+            dist = (int) r[0];
+        }
+        JSONArray log = Store.loadArray(this, Store.F_LOCATION);
+        try {
+            JSONObject o = new JSONObject();
+            o.put("t", Collector.now());
+            o.put("lat", l.getLatitude());
+            o.put("lng", l.getLongitude());
+            o.put("dist", dist);
+            o.put("state", dist > 500 ? "外出中" : "拠点内");
+            o.put("auto", true);
+            log.put(o);
+        } catch (Exception ignored) {
+        }
+        while (log.length() > 200) {
+            log.remove(0);
+        }
+        Store.saveArray(this, Store.F_LOCATION, log);
     }
 
     private void requestPerms() {

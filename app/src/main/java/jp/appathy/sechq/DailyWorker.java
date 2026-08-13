@@ -37,6 +37,13 @@ public class DailyWorker extends Worker {
 
             appendHistory(c, score);
 
+            try {
+                Exporter.writeToExportTree(c,
+                        Exporter.exportName(),
+                        Exporter.pretty(Exporter.buildJson(c, checks, score, null)));
+            } catch (Exception ignored) {
+            }
+
             int last = Store.prefs(c).getInt("last_score", -1);
             Store.prefs(c).edit().putInt("last_score", score).apply();
 
