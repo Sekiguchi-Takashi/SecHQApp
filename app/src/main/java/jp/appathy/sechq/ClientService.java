@@ -86,6 +86,7 @@ public class ClientService extends Service {
         try {
             writeStatus(c, "出社");
             checkWifiPolicy(c);
+            checkClockOutReminder(c);
             JSONObject cmd = readCmd(c);
             if (cmd == null) {
                 return;
@@ -110,6 +111,7 @@ public class ClientService extends Service {
                 if ("photo".equals(type)) {
                     String msg = a.optString("msg", "机上の書類を点検してください");
                     Store.prefs(c).edit().putString("pending_photo", msg).apply();
+                    saveMessage(c, "【撮影指示】" + msg);
                     notifyUser(c, "管理者からのメッセージ", msg + "（タップして撮影）", "photo");
                 } else if ("location".equals(type)) {
                     sendLocation(c);
@@ -119,9 +121,55 @@ public class ClientService extends Service {
                             allowed == null ? "[]" : allowed.toString()).apply();
                     checkWifiPolicy(c);
                 } else if ("message".equals(type)) {
-                    notifyUser(c, "管理者からのメッセージ", a.optString("msg", ""), "open");
+                    String msg = a.optString("msg", "");
+                    saveMessage(c, msg);
+                    notifyUser(c, "管理者からのメッセージ", msg, "open");
                 }
             }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static final String F_MESSAGES = "messages.json";
+
+    public static void saveMessage(Context c, String msg) {
+        try {
+            JSONArray arr = Store.loadArray(c, F_MESSAGES);
+            JSONObject o = new JSONObject();
+            o.put("t", Collector.now());
+            o.put("msg", msg);
+            o.put("read", false);
+            arr.put(o);
+            while (arr.length() > 50) {
+                arr.remove(0);
+            }
+            Store.saveArray(c, F_MESSAGES, arr);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static int unreadCount(Context c) {
+        JSONArray arr = Store.loadArray(c, F_MESSAGES);
+        int n = 0;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && !o.optBoolean("read", false)) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    public static void markAllRead(Context c) {
+        try {
+            JSONArray arr = Store.loadArray(c, F_MESSAGES);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o != null) {
+                    o.put("read", true);
+                }
+            }
+            Store.saveArray(c, F_MESSAGES, arr);
         } catch (Exception ignored) {
         }
     }
@@ -137,6 +185,25 @@ public class ClientService extends Service {
             o.put("VPN", Collector.vpnActive(c) ? "接続中" : "未使用");
             Exporter.writeToExportTree(c,
                     "status_" + Exporter.deviceId() + ".json", Exporter.pretty(o));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void checkClockOutReminder(Context c) {
+        try {
+            int hour = Store.prefs(c).getInt("clockout_hour", 20);
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            if (cal.get(java.util.Calendar.HOUR_OF_DAY) < hour) {
+                return;
+            }
+            String today = Collector.today();
+            if (today.equals(Store.prefs(c).getString("clockout_notified", ""))) {
+                return;
+            }
+            Store.prefs(c).edit().putString("clockout_notified", today).apply();
+            notifyUser(c, "退社ボタンの押し忘れ？",
+                    hour + "時を過ぎても出社中のままです。退社する場合はタップして退社を押してください",
+                    "open");
         } catch (Exception ignored) {
         }
     }

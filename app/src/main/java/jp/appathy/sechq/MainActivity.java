@@ -17,6 +17,8 @@ import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -261,6 +263,8 @@ public class MainActivity extends AppCompatActivity {
         tabBarView.setVisibility(View.VISIBLE);
         headerSub.setText("管理者モード — Appathy / SecHQ");
         NightlyWorker.schedule(this);
+        adminBeat.removeCallbacks(beatTask);
+        adminBeat.postDelayed(beatTask, 4 * 60 * 1000L);
         render(1);
         new Thread(new Runnable() {
             @Override
@@ -315,6 +319,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        adminBeat.removeCallbacks(beatTask);
         if (!isClientMode() && adminLock != null && adminLock.mine) {
             AdminHub.release(this);
         }
@@ -339,8 +344,35 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle("設定")
                 .setItems(new String[]{
                         "共有フォルダを選択" + (tree.isEmpty() ? " (未設定)" : " (設定済み)"),
+                        "退社リマインド時刻 (現在 "
+                                + Store.prefs(this).getInt("clockout_hour", 20) + "時)",
                         "モードを切り替え",
                 }, (d, w) -> {
+                    if (w == 1) {
+                        final EditText ed = new EditText(this);
+                        ed.setHint("0〜23の時刻");
+                        ed.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                        ed.setText(String.valueOf(
+                                Store.prefs(this).getInt("clockout_hour", 20)));
+                        new AlertDialog.Builder(this)
+                                .setTitle("退社リマインド時刻")
+                                .setView(ed)
+                                .setPositiveButton("保存", (d2, w2) -> {
+                                    try {
+                                        int h = Integer.parseInt(
+                                                ed.getText().toString().trim());
+                                        if (h >= 0 && h <= 23) {
+                                            Store.prefs(this).edit()
+                                                    .putInt("clockout_hour", h).apply();
+                                            toast(h + "時に設定しました");
+                                        }
+                                    } catch (Exception ignored) {
+                                    }
+                                })
+                                .setNegativeButton("キャンセル", null)
+                                .show();
+                        return;
+                    }
                     if (w == 0) {
                         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
                         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -353,6 +385,7 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .show();
     }
+
 
     // ---------------- shell ----------------
 
@@ -507,6 +540,40 @@ public class MainActivity extends AppCompatActivity {
         out.setOnClickListener(vw -> clockOut());
         body.addView(out);
 
+        JSONArray msgs = Store.loadArray(this, ClientService.F_MESSAGES);
+        int unread = ClientService.unreadCount(this);
+        if (msgs.length() > 0) {
+            LinearLayout mc = card();
+            TextView mt = new TextView(this);
+            mt.setText(unread > 0 ? "📩 管理者からのメッセージ（未読 " + unread + " 件）"
+                    : "管理者からのメッセージ");
+            mt.setTextColor(unread > 0 ? ACC : SUB);
+            mt.setTypeface(Typeface.DEFAULT_BOLD);
+            mt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            mc.addView(mt);
+            int start = Math.max(0, msgs.length() - 10);
+            for (int i = msgs.length() - 1; i >= start; i--) {
+                JSONObject o = msgs.optJSONObject(i);
+                if (o == null) {
+                    continue;
+                }
+                TextView t = new TextView(this);
+                t.setText((o.optBoolean("read", false) ? "" : "● ")
+                        + o.optString("t") + "\n" + o.optString("msg"));
+                t.setTextColor(o.optBoolean("read", false) ? SUB : TEXT);
+                t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+                t.setPadding(0, dp(8), 0, 0);
+                mc.addView(t);
+            }
+            body.addView(mc);
+            if (unread > 0) {
+                body.addView(btn("既読にする", vw -> {
+                    ClientService.markAllRead(this);
+                    renderClient();
+                }));
+            }
+        }
+
         if (tree.isEmpty()) {
             TextView warn = new TextView(this);
             warn.setText("共有フォルダが未設定です。タイトルを長押しして設定してください");
@@ -652,6 +719,38 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private final Handler adminBeat = new Handler(Looper.getMainLooper());
+    private final Runnable beatTask = new Runnable() {
+        @Override
+        public void run() {
+            if (isClientMode() || Store.prefs(MainActivity.this)
+                    .getString("mode", "").isEmpty()) {
+                return;
+            }
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final AdminHub.Lock l = AdminHub.acquire(MainActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            boolean was = adminLock != null && adminLock.conflict;
+                            adminLock = l;
+                            if (l.conflict != was) {
+                                tabBarView.setVisibility(l.conflict ? View.GONE : View.VISIBLE);
+                                headerSub.setText(l.conflict
+                                        ? "管理者機能は停止中（他端末が使用中）"
+                                        : "管理者モード — Appathy / SecHQ");
+                                render(1);
+                            }
+                        }
+                    });
+                }
+            }).start();
+            adminBeat.postDelayed(this, 4 * 60 * 1000L);
+        }
+    };
+
     private AdminHub.Inbox inbox;
     private boolean inboxLoading;
     private AdminHub.Lock adminLock;
@@ -766,6 +865,10 @@ public class MainActivity extends AppCompatActivity {
                         d.score >= 80 ? OK : (d.score >= 60 ? WARN : BAD));
             }
             l.setOnClickListener(vw -> commandDialog(d.id));
+            l.setOnLongClickListener(vw -> {
+                deviceHistory(d);
+                return true;
+            });
             v.addView(l);
         }
 
@@ -792,6 +895,51 @@ public class MainActivity extends AppCompatActivity {
             eh.addView(note("受信はまだありません"));
         }
         v.addView(eh);
+    }
+
+    private void deviceHistory(AdminHub.Device d) {
+        ScrollView sv = new ScrollView(this);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(12), dp(20), dp(12));
+        box.setBackgroundColor(CARD);
+
+        TextView h = new TextView(this);
+        h.setText(d.id + "\n状態 " + d.state + " / 最終受信 " + d.lastAt
+                + (d.score >= 0 ? " / スコア " + d.score : ""));
+        h.setTextColor(TEXT);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        h.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        box.addView(h);
+
+        java.util.List<AdminHub.Event> evs = new java.util.ArrayList<>(d.events);
+        java.util.Collections.sort(evs, new java.util.Comparator<AdminHub.Event>() {
+            @Override
+            public int compare(AdminHub.Event a, AdminHub.Event b) {
+                return b.at.compareTo(a.at);
+            }
+        });
+        for (AdminHub.Event e : evs) {
+            TextView t = new TextView(this);
+            t.setText(e.at + "  [" + e.kind + "]\n　" + e.summary);
+            t.setTextColor("警告".equals(e.kind) ? BAD : TEXT);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            t.setPadding(0, dp(6), 0, 0);
+            box.addView(t);
+        }
+        if (evs.isEmpty()) {
+            TextView t = new TextView(this);
+            t.setText("受信履歴はありません");
+            t.setTextColor(SUB);
+            box.addView(t);
+        }
+
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setView(sv)
+                .setPositiveButton("閉じる", null)
+                .setNeutralButton("指示を送る", (dl, w) -> commandDialog(d.id))
+                .show();
     }
 
     private void loadInbox() {
