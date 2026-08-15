@@ -85,6 +85,10 @@
 - スコア履歴: `history.json` に日次で最大90件。AI分析タブに14日分の横棒グラフ
 - WorkManager 24時間周期の `DailyWorker`: バックグラウンドでスキャン→履歴追記→「暗号化拡張子検出 / スコア60未満 / 10以上の低下」で通知
 
+## deploy.sh（恒久仕様）
+
+`git pull --rebase origin main` とタグ発行を含む定型スクリプト。カタログ管理システムが API 経由で `.github/workflows/release.yml` と `ci/appathy.keystore` を直接コミットするため、rebase が無いと push が rejected になる。**`ci/` と `release.yml` は配布ビルドに必要なので削除・追跡解除しないこと**。タグを打つと Actions がビルドして Release を作り、自作アプリストアに更新として現れる。
+
 ## 署名（v1.6〜）
 
 `app/sechq.keystore`（alias: sechq / pass: sechqpass）を debug/release 両方の signingConfig に固定。CIランナー任せのdebug署名だと毎回変わり上書きインストール不可になるための措置。**このキーストアを削除・再生成すると既存端末は再びアンインストールが必要になる**ので変更しないこと。

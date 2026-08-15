@@ -1,34 +1,19 @@
-#!/bin/bash
-set -e
-
+#!/data/data/com.termux/files/usr/bin/bash
 cd "$(dirname "$0")"
-
-REPO=SecHQApp
-USER=Sekiguchi-Takashi
-MSG="${1:-update}"
 TOKEN=$(git config --global github.token)
-
-if [ -z "$TOKEN" ]; then
-  printf '%s\n' "github.token is not set: git config --global github.token ghp_XXXX"
-  exit 1
-fi
-
-curl -s -o /dev/null -X POST \
-  -H "Authorization: token $TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  https://api.github.com/user/repos \
-  -d "{\"name\":\"$REPO\",\"private\":true}" || true
-
-if [ ! -d .git ]; then
-  git init
-fi
-
-git branch -M main || true
-git remote remove origin 2>/dev/null || true
-git remote add origin "https://$USER:$TOKEN@github.com/$USER/$REPO.git"
-
+GHUSER=Sekiguchi-Takashi
+REPO=SecHQApp
+API=https://api.github.com/repos/${GHUSER}/${REPO}
+if [ ! -d .git ]; then git init -b main; fi
+git remote remove origin 2>/dev/null
+git remote add origin "https://${GHUSER}:${TOKEN}@github.com/${GHUSER}/${REPO}.git"
 git add -A
-git commit -m "$MSG" || true
-git push -u origin main --force
-
-printf '%s\n' "pushed: $REPO / $MSG"
+git commit -m "${1:-update}"
+git pull --rebase origin main
+git push -u origin main
+LATEST=$(curl -s -H "Authorization: token ${TOKEN}" "${API}/releases?per_page=1" | tr -d ' \n' | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)
+NEXT=$(printf '%s' "$LATEST" | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { split($0,a,"."); sub("v","",a[1]); print "v" a[1] "." a[2] "." a[3]+1; next } /^v[0-9]+\.[0-9]+$/ { split($0,a,"."); sub("v","",a[1]); print "v" a[1] "." a[2] ".1"; next } /[0-9]+$/ { match($0,/[0-9]+$/); p=substr($0,1,RSTART-1); n=substr($0,RSTART)+1; print p n; next } { print "v1.0.0" }')
+if [ -z "$NEXT" ]; then NEXT=v1.0.0; fi
+SHA=$(curl -s -H "Authorization: token ${TOKEN}" "${API}/git/ref/heads/main" | tr -d ' \n' | grep -o '"sha":"[^"]*"' | head -1 | cut -d'"' -f4)
+curl -s -o /dev/null -H "Authorization: token ${TOKEN}" -d "{\"ref\":\"refs/tags/${NEXT}\",\"sha\":\"${SHA}\"}" "${API}/git/refs"
+printf 'pushed and tagged %s\n' "$NEXT"
