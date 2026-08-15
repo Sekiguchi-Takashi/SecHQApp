@@ -10,7 +10,7 @@
 - 言語: Java / プログラマティックUI（XMLレイアウトなし）
 - minSdk 24 / targetSdk 34 / AGP 8.5.2 / Gradle 8.7
 - 依存: appcompat, core, documentfile のみ
-- CI: `.github/workflows/android.yml`（gradle wrapper jar を同梱せず、CI側の gradle 8.7 を使用）
+- CI: `.github/workflows/build.yml`（gradle wrapper jar を同梱せず、CI側の gradle 8.7 を使用）。**`actions/upload-artifact` は使わない**（Artifactsストレージ無料枠0.5GBが枯渇し "Artifact storage quota has been hit" でビルドが落ちるため）。build.yml はコンパイル確認用と割り切り、APKの配布は `release.yml` が作る Release から行う
 - 保存: `filesDir` の JSON（accounts / snapshot / location）＋ SharedPreferences（tree, home_lat/lng）
 
 ## ファイル
@@ -124,7 +124,7 @@
 
 ## 管理者アプリ（v2.0 / :admin モジュール）
 
-1リポジトリ2アプリ構成。`admin/` に `jp.appathy.sechq.admin`（SecHQ 管理者）。CIは両モジュールをビルドし、`SecHQApp-debug-apk` と `SecHQAdmin-debug-apk` の2つのartifactを出す。署名はクライアントと同じ `app/sechq.keystore` を相対参照。
+1リポジトリ2アプリ構成。`admin/` に `jp.appathy.sechq.admin`（SecHQ 管理者）。CIは両モジュールをビルドする（artifactのアップロードはしない）。署名はクライアントと同じ `app/sechq.keystore` を相対参照。
 
 - **データフロー**: 各端末がDrive共有フォルダへ `sechq_<端末ID>_YYYY-MM-DD.json` を日次エクスポート（v1.9でファイル名に端末IDを追加。旧形式 `sechq_日付.json` も資産.モデルで救済）→ 管理者アプリがそのフォルダをSAFで読み、`Fleet.load` が端末IDごとに最新レポートを採用。
 - **ダッシュボード**: 台数/レポート数/平均スコア、💣️ランサム痕跡端末数、⏳7日以上未報告端末数。端末カード（スコア低い順）→タップでカテゴリ別・NG項目と対策・スコア推移。
