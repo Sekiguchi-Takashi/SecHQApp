@@ -540,6 +540,37 @@ public class MainActivity extends AppCompatActivity {
         out.setOnClickListener(vw -> clockOut());
         body.addView(out);
 
+        String allowedRaw = Store.prefs(this).getString("wifi_allowed", "");
+        if (atWork && !allowedRaw.isEmpty() && !"[]".equals(allowedRaw)
+                && Collector.isWifi(this)) {
+            String ssid = Collector.ssid(this);
+            boolean ok = ssid.startsWith("不明") || "-".equals(ssid);
+            if (!ok) {
+                try {
+                    JSONArray al = new JSONArray(allowedRaw);
+                    for (int i = 0; i < al.length(); i++) {
+                        if (ssid.equals(al.optString(i))) {
+                            ok = true;
+                            break;
+                        }
+                    }
+                } catch (Exception e) {
+                    ok = true;
+                }
+            }
+            if (!ok) {
+                LinearLayout wc = card();
+                TextView wt = new TextView(this);
+                wt.setText("⚠️ 許可外のWi-Fiに接続中\n「" + ssid + "」");
+                wt.setTextColor(BAD);
+                wt.setTypeface(Typeface.DEFAULT_BOLD);
+                wt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+                wc.addView(wt);
+                wc.addView(btn("Wi-Fiを切り替える", vw -> openWifiPanel()));
+                body.addView(wc);
+            }
+        }
+
         JSONArray msgs = Store.loadArray(this, ClientService.F_MESSAGES);
         int unread = ClientService.unreadCount(this);
         if (msgs.length() > 0) {
@@ -812,14 +843,59 @@ public class MainActivity extends AppCompatActivity {
             toast("全件到着したため自動集計しました");
         }
 
+        java.util.List<AdminHub.Event> alerts = new java.util.ArrayList<>();
+        for (AdminHub.Event e : inbox.events) {
+            if ("警告".equals(e.kind) && !AdminHub.isAcked(this, e.fileName)) {
+                alerts.add(e);
+            }
+        }
+        if (!alerts.isEmpty()) {
+            LinearLayout ac = card();
+            TextView at = new TextView(this);
+            at.setText("⚠️ 未対応の警告 " + alerts.size() + " 件");
+            at.setTextColor(BAD);
+            at.setTypeface(Typeface.DEFAULT_BOLD);
+            at.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            ac.addView(at);
+            int n = 0;
+            for (final AdminHub.Event e : alerts) {
+                if (n >= 10) {
+                    break;
+                }
+                n++;
+                TextView t = new TextView(this);
+                t.setText(e.at + "  " + e.device + "\n　" + e.summary);
+                t.setTextColor(TEXT);
+                t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                t.setPadding(0, dp(6), 0, 0);
+                ac.addView(t);
+            }
+            ac.addView(btn("すべて対応済みにする", vw -> {
+                for (AdminHub.Event e : alerts) {
+                    AdminHub.ack(this, e.fileName);
+                }
+                toast("対応済みにしました");
+                render(1);
+            }));
+            v.addView(ac);
+        }
+
         v.addView(btn("今すぐ集計", vw -> {
             AdminHub.Summary x = AdminHub.aggregate(this, inbox);
             AdminHub.saveSummary(this, x, "手動");
             toast("集計しました");
             render(1);
         }));
+        v.addView(btn("レポートを共有", vw -> {
+            String body = AdminHub.reportText(this, inbox, AdminHub.aggregate(this, inbox));
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(Intent.EXTRA_TEXT, body);
+            startActivity(Intent.createChooser(i, "集計レポートを共有"));
+        }));
         v.addView(btn("対象台数を設定", vw -> expectedDialog()));
         v.addView(btn("全端末へ指示", vw -> commandDialog(null)));
+        v.addView(btn("古い受信データを整理", vw -> cleanupDialog()));
 
         LinearLayout dh = card();
         TextView dt = new TextView(this);
@@ -963,6 +1039,51 @@ public class MainActivity extends AppCompatActivity {
                 });
             }
         }).start();
+    }
+
+    private void cleanupDialog() {
+        final int keep = Store.prefs(this).getInt("keep_days", 30);
+        new AlertDialog.Builder(this)
+                .setTitle("古い受信データを整理")
+                .setMessage(keep + " 日より古い loc_ / alert_ / desk_ / sechq_ を削除します。"
+                        + "\nstatus_ と summary_ は残ります。")
+                .setPositiveButton("実行", (d, w) -> new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        final int n = AdminHub.cleanup(MainActivity.this, keep);
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                toast(n + " 件を削除しました");
+                                inbox = null;
+                                loadInbox();
+                            }
+                        });
+                    }
+                }).start())
+                .setNeutralButton("保持日数を変更", (d, w) -> {
+                    final EditText ed = new EditText(this);
+                    ed.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                    ed.setText(String.valueOf(keep));
+                    new AlertDialog.Builder(this)
+                            .setTitle("保持日数")
+                            .setView(ed)
+                            .setPositiveButton("保存", (d2, w2) -> {
+                                try {
+                                    int k = Integer.parseInt(ed.getText().toString().trim());
+                                    if (k >= 1) {
+                                        Store.prefs(this).edit()
+                                                .putInt("keep_days", k).apply();
+                                        toast(k + " 日に設定しました");
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            })
+                            .setNegativeButton("キャンセル", null)
+                            .show();
+                })
+                .setNegativeButton("キャンセル", null)
+                .show();
     }
 
     private void expectedDialog() {

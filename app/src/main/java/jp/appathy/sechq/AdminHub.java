@@ -391,6 +391,97 @@ public class AdminHub {
         }
     }
 
+    // ---------------- retention ----------------
+
+    /** 保持日数を過ぎた一過性ファイル（loc_/alert_/desk_/status_）を削除して件数を返す。 */
+    public static int cleanup(Context c, int keepDays) {
+        int removed = 0;
+        try {
+            String tree = Store.prefs(c).getString("export_tree", "");
+            if (tree.isEmpty()) {
+                return 0;
+            }
+            DocumentFile root = DocumentFile.fromTreeUri(c, Uri.parse(tree));
+            if (root == null) {
+                return 0;
+            }
+            DocumentFile[] list = root.listFiles();
+            if (list == null) {
+                return 0;
+            }
+            long cutoff = System.currentTimeMillis() - keepDays * 86400000L;
+            for (DocumentFile f : list) {
+                String name = f.getName();
+                if (name == null || f.isDirectory()) {
+                    continue;
+                }
+                boolean transient_ = name.startsWith("loc_") || name.startsWith("alert_")
+                        || name.startsWith("desk_") || name.startsWith("sechq_");
+                if (!transient_) {
+                    continue;
+                }
+                if (f.lastModified() > 0 && f.lastModified() >= cutoff) {
+                    continue;
+                }
+                if (f.delete()) {
+                    removed++;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return removed;
+    }
+
+    // ---------------- acknowledgement ----------------
+
+    public static boolean isAcked(Context c, String fileName) {
+        return Store.prefs(c).getStringSet("acked", new java.util.HashSet<String>())
+                .contains(fileName);
+    }
+
+    public static void ack(Context c, String fileName) {
+        java.util.Set<String> set = new java.util.HashSet<>(
+                Store.prefs(c).getStringSet("acked", new java.util.HashSet<String>()));
+        set.add(fileName);
+        while (set.size() > 500) {
+            set.remove(set.iterator().next());
+        }
+        Store.prefs(c).edit().putStringSet("acked", set).apply();
+    }
+
+    // ---------------- report ----------------
+
+    public static String reportText(Context c, Inbox in, Summary s) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("SecHQ 集計レポート\n");
+        sb.append(s.at).append('\n');
+        sb.append("端末 ").append(s.devices).append(" 台 / 出社中 ").append(s.atWork);
+        sb.append(" / 報告済 ").append(s.reported).append('\n');
+        sb.append("平均スコア ").append(s.avgScore < 0 ? "-" : s.avgScore).append('\n');
+        sb.append("警告 ").append(s.alerts).append(" 件\n\n");
+        sb.append("【端末別】\n");
+        for (Device d : in.devices) {
+            sb.append(d.id).append("  ").append(d.state);
+            if (d.score >= 0) {
+                sb.append("  スコア").append(d.score);
+            }
+            sb.append("  最終").append(d.lastAt).append('\n');
+        }
+        int unacked = 0;
+        StringBuilder al = new StringBuilder();
+        for (Event e : in.events) {
+            if ("警告".equals(e.kind) && !isAcked(c, e.fileName)) {
+                unacked++;
+                al.append(e.at).append("  ").append(e.device)
+                        .append("  ").append(e.summary).append('\n');
+            }
+        }
+        if (unacked > 0) {
+            sb.append("\n【未対応の警告 ").append(unacked).append(" 件】\n").append(al);
+        }
+        return sb.toString();
+    }
+
     private static JSONObject read(Context c, DocumentFile f) {
         try {
             if (f.length() > 3 * 1024 * 1024) {
