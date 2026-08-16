@@ -3,15 +3,22 @@ plugins {
 }
 
 android {
-    namespace 'jp.appathy.sechq.admin'
+    namespace 'jp.appathy.sechq.clientapp'
     compileSdk 34
 
     defaultConfig {
-        applicationId "jp.appathy.sechq.admin"
+        applicationId "jp.appathy.sechq.client"
         minSdk 24
         targetSdk 34
         versionCode 1
-        versionName "2.0"
+        versionName "1.0"
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['../app/src/main/java']
+            res.srcDirs = ['../app/src/main/res', 'src/main/res']
+        }
     }
 
     signingConfigs {
@@ -55,5 +62,8 @@ configurations.configureEach {
 dependencies {
     implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
     implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'com.google.mlkit:text-recognition-japanese:16.0.0'
+    implementation 'androidx.work:work-runtime:2.9.1'
 }

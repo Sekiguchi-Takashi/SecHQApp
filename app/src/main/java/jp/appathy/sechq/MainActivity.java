@@ -218,11 +218,16 @@ public class MainActivity extends AppCompatActivity {
         }).start();
         autoRecordLocation();
 
-        String mode = Store.prefs(this).getString("mode", "");
-        if (mode.isEmpty()) {
-            modeChooser();
-        } else {
+        if (isClientOnlyBuild()) {
+            Store.prefs(this).edit().putString("mode", "client").apply();
             applyMode();
+        } else {
+            String mode = Store.prefs(this).getString("mode", "");
+            if (mode.isEmpty()) {
+                modeChooser();
+            } else {
+                applyMode();
+            }
         }
         handleAction(getIntent());
     }
@@ -249,14 +254,38 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private Boolean clientOnly;
+
+    private boolean isClientOnlyBuild() {
+        if (clientOnly == null) {
+            boolean v = false;
+            try {
+                android.content.pm.ApplicationInfo ai = getPackageManager()
+                        .getApplicationInfo(getPackageName(),
+                                PackageManager.GET_META_DATA);
+                if (ai.metaData != null) {
+                    v = ai.metaData.getBoolean("client_only", false);
+                }
+            } catch (Exception ignored) {
+            }
+            clientOnly = v;
+        }
+        return clientOnly;
+    }
+
     private boolean isClientMode() {
+        if (isClientOnlyBuild()) {
+            return true;
+        }
         return "client".equals(Store.prefs(this).getString("mode", ""));
     }
 
     private void applyMode() {
         if (isClientMode()) {
             tabBarView.setVisibility(View.GONE);
-            headerSub.setText("クライアントモード（設定はタイトル長押し）");
+            headerSub.setText(isClientOnlyBuild()
+                    ? "出社チェック（設定はタイトル長押し）"
+                    : "クライアントモード（設定はタイトル長押し）");
             renderClient();
             return;
         }
@@ -340,14 +369,16 @@ public class MainActivity extends AppCompatActivity {
 
     private void settingsDialog() {
         String tree = Store.prefs(this).getString("export_tree", "");
+        java.util.List<String> items = new java.util.ArrayList<>();
+        items.add("共有フォルダを選択" + (tree.isEmpty() ? " (未設定)" : " (設定済み)"));
+        items.add("退社リマインド時刻 (現在 "
+                + Store.prefs(this).getInt("clockout_hour", 20) + "時)");
+        if (!isClientOnlyBuild()) {
+            items.add("モードを切り替え");
+        }
         new AlertDialog.Builder(this)
                 .setTitle("設定")
-                .setItems(new String[]{
-                        "共有フォルダを選択" + (tree.isEmpty() ? " (未設定)" : " (設定済み)"),
-                        "退社リマインド時刻 (現在 "
-                                + Store.prefs(this).getInt("clockout_hour", 20) + "時)",
-                        "モードを切り替え",
-                }, (d, w) -> {
+                .setItems(items.toArray(new String[0]), (d, w) -> {
                     if (w == 1) {
                         final EditText ed = new EditText(this);
                         ed.setHint("0〜23の時刻");
@@ -1179,6 +1210,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void adminLogout() {
+        if (isClientOnlyBuild()) {
+            return;
+        }
         AdminHub.release(this);
         Store.prefs(this).edit().remove("mode").apply();
         adminLock = null;

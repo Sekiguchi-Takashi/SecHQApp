@@ -24,6 +24,10 @@
 | `DeskInspector.java` | 撮影画像のOCRによる机上放置書類の検出 |
 | `AppAuditor.java` | インストール済みアプリの危険権限棚卸し |
 | `AttackCatalog.java` | 攻撃名→関連チェックのマッピングと🔐✅️⚠️💣️の4段階判定 |
+| `AdminHub.java` | 受信集約・指示発行・集計・整理・管理者ロック |
+| `ClientService.java` | 出社中の常駐サービス（状態送信・指示ポーリング） |
+| `NightlyWorker.java` | 23時の自動集計 |
+| `Exporter.java` | 統合JSON生成と共有フォルダへの書き込み |
 | `DailyWorker.java` | WorkManagerによる日次チェック・通知・スコア履歴 |
 | `RiskEngine.java` | ルールベース推論・重み付けスコア・改善提案 |
 | `Store.java` | JSON永続化 |
@@ -122,13 +126,20 @@
 - **位置自動記録**: 起動時に拠点登録済み＋位置権限ありの場合のみ、10分以内の lastKnownLocation を無音で履歴に記録（`auto: true`）。ACCESS_BACKGROUND_LOCATION は使わない方針（審査・許諾が重いため）。
 - `Exporter.java` に統合JSON生成を集約（MainActivity/DailyWorker共用）。JSONにスコア履歴も含む。
 
-## 管理者アプリ（v2.0 / :admin モジュール）
+## 2アプリ構成（v2.7）
 
-1リポジトリ2アプリ構成。`admin/` に `jp.appathy.sechq.admin`（SecHQ 管理者）。CIは両モジュールをビルドする（artifactのアップロードはしない）。署名はクライアントと同じ `app/sechq.keystore` を相対参照。
+同一リポジトリで2つのAPKを出す。**Javaソースは `app/src/main/java` の1本のみ**で、`client` モジュールが `sourceSets.java.srcDirs` でそれを共有する（コピーではない。片方だけ直す事故が起きない）。
 
-- **データフロー**: 各端末がDrive共有フォルダへ `sechq_<端末ID>_YYYY-MM-DD.json` を日次エクスポート（v1.9でファイル名に端末IDを追加。旧形式 `sechq_日付.json` も資産.モデルで救済）→ 管理者アプリがそのフォルダをSAFで読み、`Fleet.load` が端末IDごとに最新レポートを採用。
-- **ダッシュボード**: 台数/レポート数/平均スコア、💣️ランサム痕跡端末数、⏳7日以上未報告端末数。端末カード（スコア低い順）→タップでカテゴリ別・NG項目と対策・スコア推移。
-- 依存は appcompat + documentfile のみ。ML Kit/WorkManagerは入れない。
+| モジュール | applicationId | 表示名 | 用途 |
+|---|---|---|---|
+| `app` | jp.appathy.sechq | セキュリティ対策2.0 | 切替可能アプリ（管理者⇄クライアント） |
+| `client` | jp.appathy.sechq.client | 出社チェック | クライアント専用アプリ |
+
+- クライアント専用の判定はマニフェストの `<meta-data android:name="client_only" android:value="true"/>`。BuildConfig/Rはnamespaceに紐づき共有ソースから参照できないため、meta-dataで切り替える（Javaコードは生成Rを一切参照しない前提を維持すること）。
+- client_only ビルドではモード選択ダイアログを出さず常にクライアント、設定メニューから「モードを切り替え」を隠す。
+- リソースは `app/src/main/res` を共有し、client 側は重複しない `client_app_name` のみ追加。
+- 署名は両モジュールとも `app/sechq.keystore`。両方インストールしても applicationId が違うので共存する。
+- v2.0で作った単独の管理者アプリ（:admin / Fleet.java）は、統制タブに機能を統合したため削除。
 
 ## モード切替（v2.1）
 
