@@ -10,7 +10,7 @@
 - 言語: Java / プログラマティックUI（XMLレイアウトなし）
 - minSdk 24 / targetSdk 34 / AGP 8.5.2 / Gradle 8.7
 - 依存: appcompat, core, documentfile のみ
-- CI: `.github/workflows/build.yml`（gradle wrapper jar を同梱せず、CI側の gradle 8.7 を使用）。**`actions/upload-artifact` は使わない**（Artifactsストレージ無料枠0.5GBが枯渇し "Artifact storage quota has been hit" でビルドが落ちるため）。build.yml はコンパイル確認用と割り切り、APKの配布は `release.yml` が作る Release から行う
+- CI: **`release.yml`（タグ起動）のみ**。`build.yml` は作らない。`actions/upload-artifact` は使わない（Artifacts枠0.5GBが枯渇し全ビルドが落ちるため）。APKの配布はタグ発行で走る Release から行う
 - 保存: `filesDir` の JSON（accounts / snapshot / location）＋ SharedPreferences（tree, home_lat/lng）
 
 ## ファイル
@@ -103,9 +103,13 @@
 - **管理者ロックのハートビート**: 4分間隔で `admin_lock.json` を更新。アプリを開いたまま10分放置しても他端末に奪われない。競合状態の変化を検知したら即UIへ反映。
 - **端末履歴の詳細**: 統制タブの端末カードを長押しで、その端末の全受信履歴（時刻降順）をダイアログ表示。そこから直接指示送信も可能。
 
-## deploy.sh（恒久仕様）
+## 納品規約（恒久 / v2.8〜）
 
-`git pull --rebase origin main` とタグ発行を含む定型スクリプト。カタログ管理システムが API 経由で `.github/workflows/release.yml` と `ci/appathy.keystore` を直接コミットするため、rebase が無いと push が rejected になる。**`ci/` と `release.yml` は配布ビルドに必要なので削除・追跡解除しないこと**。タグを打つと Actions がビルドして Release を作り、自作アプリストアに更新として現れる。
+1. `deploy.sh` は push → `git pull --rebase origin main` → タグ発行まで完結。次タグは `git fetch --tags` 後の `git tag --list 'v*' | sort -V` の最大値から算出し、`git tag` / `git push origin <タグ>` で**ローカル発行**する（GitHub APIのheads/releases参照は反映遅延で一つ前のタグに付くため禁止）。第2引数 `notag` で push のみ。
+2. `build.yml` は作らない。CIは `release.yml`（タグ起動）のみ。`actions/upload-artifact` は使わない。
+3. `ci/` と `.github/workflows/release.yml` は配布ビルドに必要。削除・追跡解除しない（`.gitignore` にも入れない）。
+4. ファイルを削除する納品では `deploy.sh` の先頭に `rm -f <対象パス>` を足す（`unzip -o` は端末の旧ファイルを消さないため）。現在は `admin/`・`build.yml`・`android.yml` の除去を含む。
+5. 納品はバージョン番号付きZIP＋実行4行ブロック。冒頭に【本番】か【テスト】を明示。シェルは echo 禁止・対話入力禁止・トークンをチャットへ貼らせない。
 
 ## 署名（v1.6〜）
 
