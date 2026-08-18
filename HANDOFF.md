@@ -120,6 +120,10 @@
 - **メール検証**: アカウントに `mail` を登録して検証すると `mail_verdict` を保存。使い捨て/失効ドメインがあれば weight10 のNG。
 - **逆ジオコーディング**: 拠点と最終地点の地名を `home_place` / `last_place` に保存し、物理・外出タブに表示（緯度経度だけでは外出判定の妥当性を確認しづらいため）。
 
+## Javaの注意（v2.9.1で踏んだ）
+
+**ラムダ式の中で、外側のメソッドのローカル変数と同じ名前を宣言できない**（匿名内部クラスは可）。プログラマティックUIでは `TextView t` などを多用するため、`vw -> { ... }` の中で短い変数名を使うと `variable t is already defined` で落ちる。ラムダ内では `code` `addr` のように用途がわかる名前を使うこと。
+
 ## 納品規約（恒久 / v2.8〜）
 
 1. `deploy.sh` は push → `git pull --rebase origin main` → タグ発行まで完結。次タグは `git fetch --tags` 後の `git tag --list 'v*' | sort -V` の最大値から算出し、`git tag` / `git push origin <タグ>` で**ローカル発行**する（GitHub APIのheads/releases参照は反映遅延で一つ前のタグに付くため禁止）。第2引数 `notag` で push のみ。

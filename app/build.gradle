@@ -10,8 +10,8 @@ android {
         applicationId "jp.appathy.sechq"
         minSdk 24
         targetSdk 34
-        versionCode 18
-        versionName "2.9"
+        versionCode 19
+        versionName "2.9.1"
     }
 
     signingConfigs {

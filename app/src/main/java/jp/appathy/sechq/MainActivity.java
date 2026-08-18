@@ -2034,9 +2034,11 @@ public class MainActivity extends AppCompatActivity {
                     .setTitle("想定する接続元の国コード")
                     .setView(ed)
                     .setPositiveButton("保存", (d, w) -> {
-                        String t = ed.getText().toString().trim().toUpperCase(Locale.US);
-                        if (!t.isEmpty()) {
-                            Store.prefs(this).edit().putString("home_country", t).apply();
+                        String code = ed.getText().toString().trim()
+                                .toUpperCase(Locale.US);
+                        if (!code.isEmpty()) {
+                            Store.prefs(this).edit()
+                                    .putString("home_country", code).apply();
                             render(8);
                         }
                     })
