@@ -29,6 +29,7 @@ public class DailyWorker extends Worker {
     public Result doWork() {
         Context c = getApplicationContext();
         try {
+            NetProbe.lookupIp(c);
             String tree = Store.prefs(c).getString("tree", "");
             FileScanner.Result files = tree.isEmpty() ? null : FileScanner.scan(c, tree);
             JSONArray accounts = Store.loadArray(c, Store.F_ACCOUNTS);

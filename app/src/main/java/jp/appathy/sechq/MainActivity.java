@@ -1448,6 +1448,16 @@ public class MainActivity extends AppCompatActivity {
             if (!role.isEmpty()) {
                 kv(c, "権限", role);
             }
+            final String mailAddr = o.optString("mail", "");
+            if (!mailAddr.isEmpty()) {
+                String verdict = o.optString("mail_verdict", "");
+                kv(c, "メール", mailAddr);
+                kvColor(c, "検証結果",
+                        verdict.isEmpty() ? "未検証" : verdict,
+                        verdict.isEmpty() ? SUB
+                                : (verdict.startsWith("問題は") ? OK : BAD));
+                c.addView(btn("メールを検証", vw -> verifyMail(idx, mailAddr)));
+            }
             c.addView(btn("削除", vw -> {
                 JSONArray cur = Store.loadArray(this, Store.F_ACCOUNTS);
                 JSONArray out = new JSONArray();
@@ -1478,6 +1488,11 @@ public class MainActivity extends AppCompatActivity {
         role.setHint("権限 (例: 管理者 / 一般)");
         box.addView(role);
 
+        final EditText mail = new EditText(this);
+        mail.setHint("登録メールアドレス（任意・検証に使用）");
+        mail.setInputType(android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        box.addView(mail);
+
         final EditText pw = new EditText(this);
         pw.setHint("パスワード最終更新日 (yyyy-MM-dd)");
         pw.setText(Collector.today());
@@ -1502,6 +1517,7 @@ public class MainActivity extends AppCompatActivity {
                         o.put("name", n);
                         o.put("role", role.getText().toString().trim());
                         o.put("pw", pw.getText().toString().trim());
+                        o.put("mail", mail.getText().toString().trim());
                         o.put("mfa", mfa.isChecked());
                         arr.put(o);
                     } catch (Exception ignored) {
@@ -1511,6 +1527,37 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("キャンセル", null)
                 .show();
+    }
+
+    private void verifyMail(final int idx, final String addr) {
+        toast("検証中です");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final NetProbe.MailInfo m = NetProbe.verifyEmail(addr);
+                final String verdict = NetProbe.mailVerdict(m);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        JSONArray arr = Store.loadArray(MainActivity.this,
+                                Store.F_ACCOUNTS);
+                        JSONObject o = arr.optJSONObject(idx);
+                        if (o != null) {
+                            try {
+                                o.put("mail_verdict", verdict);
+                                o.put("mail_checked", Collector.now());
+                            } catch (Exception ignored) {
+                            }
+                            Store.saveArray(MainActivity.this, Store.F_ACCOUNTS, arr);
+                        }
+                        toast(verdict);
+                        if (current == 4) {
+                            render(4);
+                        }
+                    }
+                });
+            }
+        }).start();
     }
 
     private void screenFiles(LinearLayout v) {
@@ -1923,6 +1970,80 @@ public class MainActivity extends AppCompatActivity {
         v.addView(j);
 
         v.addView(btn("再取得", vw -> render(8)));
+
+        JSONObject ipi = NetProbe.saved(this);
+        LinearLayout ic = card();
+        TextView it = new TextView(this);
+        it.setText("外部IP照合（グローバルIP・回線事業者・接続元の国）");
+        it.setTextColor(SUB);
+        it.setTypeface(Typeface.DEFAULT_BOLD);
+        it.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        ic.addView(it);
+        if (ipi == null) {
+            ic.addView(note("未照合です"));
+        } else {
+            kv(ic, "グローバルIP", ipi.optString("ip"));
+            String home = Store.prefs(this).getString("home_country", "JP");
+            String cc = ipi.optString("国コード");
+            kvColor(ic, "接続元の国",
+                    ipi.optString("国") + " (" + cc + ")",
+                    cc.isEmpty() || home.equalsIgnoreCase(cc) ? OK : BAD);
+            kv(ic, "地域", ipi.optString("地域") + " " + ipi.optString("都市"));
+            kvColor(ic, "回線事業者", ipi.optString("回線事業者"),
+                    ipi.optBoolean("ホスティング系", false) ? WARN : OK);
+            kv(ic, "ASN", ipi.optString("ASN"));
+            kv(ic, "取得日時", ipi.optString("取得日時"));
+            if (ipi.optBoolean("ホスティング系", false)) {
+                TextView w = new TextView(this);
+                w.setText("※ データセンター/VPN事業者の回線を経由しています。"
+                        + "許可されたVPN以外を使っていないか確認してください");
+                w.setTextColor(WARN);
+                w.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                w.setPadding(0, dp(6), 0, 0);
+                ic.addView(w);
+            }
+        }
+        v.addView(ic);
+
+        v.addView(btn("接続元を照合する", vw -> {
+            toast("照合中です");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final NetProbe.IpInfo r = NetProbe.lookupIp(MainActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!r.ok) {
+                                toast(r.error == null ? "照合に失敗しました" : r.error);
+                            }
+                            if (current == 8) {
+                                render(8);
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }));
+        v.addView(btn("想定する国コードを設定 (現在 "
+                + Store.prefs(this).getString("home_country", "JP") + ")", vw -> {
+            final EditText ed = new EditText(this);
+            ed.setHint("JP / US など");
+            ed.setText(Store.prefs(this).getString("home_country", "JP"));
+            new AlertDialog.Builder(this)
+                    .setTitle("想定する接続元の国コード")
+                    .setView(ed)
+                    .setPositiveButton("保存", (d, w) -> {
+                        String t = ed.getText().toString().trim().toUpperCase(Locale.US);
+                        if (!t.isEmpty()) {
+                            Store.prefs(this).edit().putString("home_country", t).apply();
+                            render(8);
+                        }
+                    })
+                    .setNegativeButton("キャンセル", null)
+                    .show();
+        }));
+        v.addView(note("IP照合は ipapi.co（無料・キー不要）を使用します"));
     }
 
     private void screenPhysical(LinearLayout v) {
@@ -1948,6 +2069,19 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         v.addView(c);
+
+        String placeHome = Store.prefs(this).getString("home_place", "");
+        String placeLast = Store.prefs(this).getString("last_place", "");
+        if (!placeHome.isEmpty() || !placeLast.isEmpty()) {
+            LinearLayout pc = card();
+            if (!placeHome.isEmpty()) {
+                kv(pc, "拠点の地名", placeHome);
+            }
+            if (!placeLast.isEmpty()) {
+                kv(pc, "最終地点の地名", placeLast);
+            }
+            v.addView(pc);
+        }
 
         v.addView(btn("現在地を取得", vw -> fetchLocation(false)));
         v.addView(btn("現在地を拠点として登録", vw -> fetchLocation(true)));
@@ -1975,6 +2109,47 @@ public class MainActivity extends AppCompatActivity {
             v.addView(l);
         }
 
+        v.addView(btn("地名を照合する（逆ジオコーディング）", vw -> {
+            SharedPreferences pp = Store.prefs(this);
+            if (!pp.contains("last_lat")) {
+                toast("先に現在地を取得してください");
+                return;
+            }
+            toast("照合中です");
+            final double hlat = pp.getFloat("home_lat", 0);
+            final double hlng = pp.getFloat("home_lng", 0);
+            final boolean hasHome = pp.contains("home_lat");
+            final double llat = pp.getFloat("last_lat", 0);
+            final double llng = pp.getFloat("last_lng", 0);
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final String lastName = NetProbe.reverseGeocode(llat, llng);
+                    final String homeName = hasHome
+                            ? NetProbe.reverseGeocode(hlat, hlng) : null;
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            SharedPreferences.Editor e = Store.prefs(MainActivity.this).edit();
+                            if (lastName != null) {
+                                e.putString("last_place", lastName);
+                            }
+                            if (homeName != null) {
+                                e.putString("home_place", homeName);
+                            }
+                            e.apply();
+                            if (lastName == null && homeName == null) {
+                                toast("地名を取得できませんでした");
+                            }
+                            if (current == 9) {
+                                render(9);
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }));
+        v.addView(note("地名照合は BigDataCloud（無料・キー不要）を使用します"));
         v.addView(note("※ 机上の書類放置検知は「書類点検」タブで行えます"));
     }
 

@@ -67,6 +67,10 @@ public class Exporter {
                 doc.put("一覧", da);
                 o.put("機密情報分類", doc);
             }
+            JSONObject ipi = NetProbe.saved(c);
+            if (ipi != null) {
+                o.put("接続元IP情報", ipi);
+            }
             o.put("スコア履歴", Store.loadArray(c, DailyWorker.F_HISTORY));
         } catch (Exception ignored) {
         }

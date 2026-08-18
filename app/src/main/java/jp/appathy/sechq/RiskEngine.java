@@ -134,6 +134,33 @@ public class RiskEngine {
             l.add(new Check(C_AUTH, "多要素認証", noMfa == 0, 20,
                     noMfa == 0 ? n + " 件すべてMFA有効" : n + " 件中 " + noMfa + " 件がMFA未設定",
                     "MFA未設定のSaaSから優先的に有効化する"));
+            int badMail = 0;
+            int uncheckedMail = 0;
+            for (int i = 0; i < n; i++) {
+                JSONObject o = accounts.optJSONObject(i);
+                if (o == null) {
+                    continue;
+                }
+                String mail = o.optString("mail", "");
+                if (mail.isEmpty()) {
+                    continue;
+                }
+                String verdict = o.optString("mail_verdict", "");
+                if (verdict.isEmpty()) {
+                    uncheckedMail++;
+                } else if (!verdict.startsWith("問題は")) {
+                    badMail++;
+                }
+            }
+            if (badMail > 0 || uncheckedMail > 0) {
+                l.add(new Check(C_AUTH, "メールアドレス検証", badMail == 0, 10,
+                        badMail > 0
+                                ? badMail + " 件に問題（使い捨て/失効ドメイン等）"
+                                : uncheckedMail + " 件が未検証",
+                        badMail > 0
+                                ? "業務アカウントの連絡先を正規のドメインへ変更する"
+                                : "認証タブでアドレスを検証する"));
+            }
             l.add(new Check(C_AUTH, "パスワード鮮度", oldPw == 0, 10,
                     oldPw == 0 ? "180日以内に更新済み" : oldPw + " 件が180日以上未更新",
                     "パスワードマネージャで長い固有パスワードへ更新する"));
@@ -190,6 +217,40 @@ public class RiskEngine {
         l.add(new Check(C_NETWORK, "VPN", !wifi || vpn, 10,
                 vpn ? "VPN接続中" : (wifi ? "Wi-Fi接続中でVPN未使用" : "モバイル回線"),
                 "社外Wi-Fi利用時はVPNを経由する"));
+
+        JSONObject ipi = NetProbe.saved(c);
+        if (ipi != null) {
+            String home = Store.prefs(c).getString("home_country", "JP");
+            String cc = ipi.optString("国コード", "");
+            boolean sameCountry = cc.isEmpty() || home.equalsIgnoreCase(cc);
+            l.add(new Check(C_NETWORK, "接続元の国", sameCountry, 15,
+                    sameCountry
+                            ? "接続元: " + ipi.optString("国") + " / "
+                                    + ipi.optString("回線事業者")
+                            : "想定(" + home + ")と異なる国から接続: "
+                                    + ipi.optString("国") + " (" + cc + ")",
+                    "心当たりがなければ通信経路と認証情報の漏えいを確認する"));
+
+            boolean hosting = ipi.optBoolean("ホスティング系", false);
+            l.add(new Check(C_NETWORK, "接続経路", !hosting, 8,
+                    hosting
+                            ? "データセンター/VPN事業者の回線を経由: "
+                                    + ipi.optString("回線事業者")
+                            : "一般回線: " + ipi.optString("回線事業者"),
+                    "業務で許可されたVPN以外の匿名化サービスを経由していないか確認する"));
+
+            String at = ipi.optString("取得日時", "");
+            boolean fresh = at.length() >= 10 && daysSince(at.substring(0, 10)) <= 7;
+            if (!fresh) {
+                l.add(new Check(C_NETWORK, "接続元の再確認", false, 5,
+                        "IP照合が7日以上前です (" + at + ")",
+                        "ネットワークタブで接続元を再照合する"));
+            }
+        } else {
+            l.add(new Check(C_NETWORK, "接続元の照合", false, 8,
+                    "外部IP照合が未実行です",
+                    "ネットワークタブで接続元を照合する"));
+        }
 
         boolean pdns = Collector.privateDnsActive(c);
         l.add(new Check(C_NETWORK, "プライベートDNS", pdns, 8,
