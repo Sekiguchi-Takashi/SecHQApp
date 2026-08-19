@@ -104,6 +104,31 @@
 - **管理者ロックのハートビート**: 4分間隔で `admin_lock.json` を更新。アプリを開いたまま10分放置しても他端末に奪われない。競合状態の変化を検知したら即UIへ反映。
 - **端末履歴の詳細**: 統制タブの端末カードを長押しで、その端末の全受信履歴（時刻降順）をダイアログ表示。そこから直接指示送信も可能。
 
+## MamoriDX 合流（v3.0）
+
+MamoriDX v8.4 のロジックを `app/src/main/java/com/appathy/mamoridx/` に取り込み、**管理者モード専用の「守りのDX」タブ（index 11）**に載せた。Kotlinプラグイン 1.9.24 を root / app / client に追加し、client 側は `kotlin.srcDirs` にも同じ共有パスを指定（Javaとの混在構成）。kotlin-stdlib の force とBOMも 1.9.24 に合わせた（コンパイラと不一致だと落ちる）。
+
+**取り込んだもの（9ファイル）**
+`UrlChecker` / `ThreatScanner` / `AccessibilityAudit` / `ApkCleaner` / `BatteryHealth` / `PcAdvisor` / `AssetLedger` / `SaasGuard` / `ShareGateActivity`
+- `ApkCleaner.formatBytes` が `DeviceStatus` に依存していたため自己完結化した。
+- `ShareGateActivity` は app モジュールのマニフェストにのみ登録（ACTION_SEND の text/plain と image/*）。client には入れていない。
+
+**重複のため取り込まなかったもの**
+| MamoriDX | SecHQAppの既存機能 |
+|---|---|
+| `DeviceStatus` | `Collector`（資産収集） |
+| `MediaScanner` / `FolderDigest` | `FileScanner` / `DocClassifier`（SAFスキャン） |
+| `RouterCheck` | `Collector.wifiSecurity` ＋ ネットワークタブ |
+| `MainActivity` / `ToolsActivity` | SecHQAppのUI体系 |
+
+**保留**
+`DnsMonitorService` / `DnsLogStore`（VpnService）は、記録専用モードで端末の通信が止まるため、出社中に常駐する `ClientService` と同時使用すると業務通信が断たれる。管理者モード専用にするか、パケット実転送を実装してから統合する（MERGE_HANDOFF 4-2 の設計判断）。
+
+**未着手（次段階）**
+- `AssetLedger` / `SaasGuard` は取り込み済みだがUI未接続。`NetProbe` との統合を検討。
+- `PcAdvisor` はチェック状態を保存する完全版UIが未実装（一覧表示のみ）。
+- MamoriDXの `mamoridx_*` SharedPreferences 名はそのまま（SecHQ側と衝突なし）。
+
 ## 外部API照合（v2.9）
 
 すべて**無料・APIキー不要・HTTPS**。`NetProbe` に集約し、必ずワーカースレッドから呼ぶ（タイムアウト8秒、失敗時はUIに理由を出して従来動作を継続）。

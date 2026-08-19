@@ -61,7 +61,7 @@ public class MainActivity extends AppCompatActivity {
 
     static final String[] TABS = {
             "ホーム", "統制", "資産", "脆弱性", "認証", "感染予防", "機密情報", "アプリ",
-            "ネットワーク", "物理・外出", "書類点検", "AI分析"
+            "ネットワーク", "物理・外出", "書類点検", "守りのDX", "AI分析"
     };
 
     private FrameLayout content;
@@ -529,6 +529,9 @@ public class MainActivity extends AppCompatActivity {
                 break;
             case 10:
                 screenDesk(body);
+                break;
+            case 11:
+                screenMamori(body);
                 break;
             default:
                 screenAi(body);
@@ -2298,6 +2301,290 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }).start();
+    }
+
+    // ---------------- 守りのDX（MamoriDX 合流分） ----------------
+
+    private com.appathy.mamoridx.AccessibilityAudit.Report a11yReport;
+    private java.util.List<com.appathy.mamoridx.ThreatScanner.Threat> threats;
+    private com.appathy.mamoridx.UrlChecker.Result urlResult;
+    private java.util.List<com.appathy.mamoridx.ApkCleaner.Installer> installers;
+
+    private void screenMamori(LinearLayout v) {
+        v.addView(sectionTitle("守りのDX",
+                "シャドーIT対策。可視化 → 許可 → ガードレール設置の順で使います"));
+
+        // --- 関所 ---
+        LinearLayout g = card();
+        TextView gt = new TextView(this);
+        gt.setText("漏洩ガード（関所）");
+        gt.setTextColor(TEXT);
+        gt.setTypeface(Typeface.DEFAULT_BOLD);
+        gt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        g.addView(gt);
+        TextView gd = new TextView(this);
+        gd.setText("他アプリの共有シートから本アプリを選ぶと、送信前にマイナンバー・"
+                + "クレジットカード番号・機密キーワード・画像のGPS情報を検査します。"
+                + "共有メニューに「守りのDX 関所」として並びます。");
+        gd.setTextColor(SUB);
+        gd.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        gd.setPadding(0, dp(6), 0, 0);
+        g.addView(gd);
+        v.addView(g);
+
+        // --- URL判定 ---
+        LinearLayout u = card();
+        TextView ut = new TextView(this);
+        ut.setText("フィッシングURL判定（完全オフライン）");
+        ut.setTextColor(TEXT);
+        ut.setTypeface(Typeface.DEFAULT_BOLD);
+        ut.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        u.addView(ut);
+        if (urlResult != null) {
+            kvColor(u, "判定",
+                    mamoriLevelText(urlResult.getLevel()) + "（スコア " + urlResult.getScore() + "）",
+                    mamoriLevelColor(urlResult.getLevel()));
+            kv(u, "ホスト", urlResult.getHost());
+            for (com.appathy.mamoridx.UrlChecker.Finding f : urlResult.getFindings()) {
+                TextView t = new TextView(this);
+                t.setText("・" + f.getTitle() + "\n　" + f.getDetail());
+                t.setTextColor(f.getSeverity() >= 2 ? BAD : (f.getSeverity() == 1 ? WARN : SUB));
+                t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                t.setPadding(0, dp(6), 0, 0);
+                u.addView(t);
+            }
+        }
+        v.addView(u);
+        v.addView(btn("URLを判定する", vw -> {
+            final EditText ed = new EditText(this);
+            ed.setHint("https://...");
+            new AlertDialog.Builder(this)
+                    .setTitle("URL判定")
+                    .setView(ed)
+                    .setPositiveButton("判定", (d, w) -> {
+                        String input = ed.getText().toString().trim();
+                        if (input.isEmpty()) {
+                            return;
+                        }
+                        urlResult = com.appathy.mamoridx.UrlChecker.INSTANCE.analyze(input);
+                        render(11);
+                    })
+                    .setNegativeButton("キャンセル", null)
+                    .show();
+        }));
+
+        // --- 侵害チェック ---
+        LinearLayout th = card();
+        TextView tt = new TextView(this);
+        tt.setText("侵害チェック（緊急対応）");
+        tt.setTextColor(TEXT);
+        tt.setTypeface(Typeface.DEFAULT_BOLD);
+        tt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        th.addView(tt);
+        if (threats == null) {
+            th.addView(note("未実行です"));
+        } else if (threats.isEmpty()) {
+            th.addView(note("直近の侵害兆候は見つかりませんでした"));
+        } else {
+            for (com.appathy.mamoridx.ThreatScanner.Threat t : threats) {
+                TextView x = new TextView(this);
+                x.setText("[" + t.getCategory() + "] " + t.getTitle() + "\n" + t.getDetail());
+                x.setTextColor(t.getSeverity() >= 2 ? BAD : (t.getSeverity() == 1 ? WARN : SUB));
+                x.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                x.setPadding(0, dp(8), 0, 0);
+                th.addView(x);
+            }
+        }
+        v.addView(th);
+        v.addView(btn("直近48時間の侵害チェック", vw -> {
+            toast("検査中です");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final java.util.List<com.appathy.mamoridx.ThreatScanner.Threat> r =
+                            com.appathy.mamoridx.ThreatScanner.INSTANCE.scan(MainActivity.this, 48);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            threats = r;
+                            if (current == 11) {
+                                render(11);
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }));
+
+        // --- ユーザー補助の権限監査 ---
+        LinearLayout a = card();
+        TextView at = new TextView(this);
+        at.setText("ユーザー補助の権限監査");
+        at.setTextColor(TEXT);
+        at.setTypeface(Typeface.DEFAULT_BOLD);
+        at.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        a.addView(at);
+        if (a11yReport == null) {
+            a.addView(note("未実行です"));
+        } else {
+            kvColor(a, "総合リスク", mamoriLevelText(a11yReport.getGlobalRisk()),
+                    mamoriLevelColor(a11yReport.getGlobalRisk()));
+            TextView sm = new TextView(this);
+            sm.setText(a11yReport.getSummary());
+            sm.setTextColor(SUB);
+            sm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            sm.setPadding(0, dp(6), 0, 0);
+            a.addView(sm);
+            for (com.appathy.mamoridx.AccessibilityAudit.Entry e
+                    : a11yReport.getEnabledEntries()) {
+                TextView x = new TextView(this);
+                StringBuilder rs = new StringBuilder();
+                for (String r : e.getReasons()) {
+                    if (rs.length() > 0) {
+                        rs.append(" / ");
+                    }
+                    rs.append(r);
+                }
+                x.setText("● " + e.getLabel() + "（" + e.getPackageName() + "）\n　" + rs);
+                x.setTextColor(e.getRisk() >= 2 ? BAD : (e.getRisk() == 1 ? WARN : TEXT));
+                x.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                x.setPadding(0, dp(8), 0, 0);
+                a.addView(x);
+            }
+        }
+        v.addView(a);
+        v.addView(btn("ユーザー補助を監査", vw -> {
+            toast("監査中です");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final com.appathy.mamoridx.AccessibilityAudit.Report r =
+                            com.appathy.mamoridx.AccessibilityAudit.INSTANCE
+                                    .run(MainActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            a11yReport = r;
+                            if (current == 11) {
+                                render(11);
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }));
+
+        // --- インストール許可の棚卸し ---
+        LinearLayout ins = card();
+        TextView it = new TextView(this);
+        it.setText("提供元不明アプリのインストール許可");
+        it.setTextColor(TEXT);
+        it.setTypeface(Typeface.DEFAULT_BOLD);
+        it.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        ins.addView(it);
+        if (installers == null) {
+            ins.addView(note("未実行です"));
+        } else if (installers.isEmpty()) {
+            ins.addView(note("許可されたアプリはありません"));
+        } else {
+            for (com.appathy.mamoridx.ApkCleaner.Installer x : installers) {
+                TextView t = new TextView(this);
+                t.setText("・" + x.getLabel() + "\n　" + x.getReason());
+                t.setTextColor(x.getRisk() >= 2 ? BAD : (x.getRisk() == 1 ? WARN : SUB));
+                t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                t.setPadding(0, dp(6), 0, 0);
+                ins.addView(t);
+            }
+            ins.addView(note("取り消しはアプリからは行えません。設定 → アプリ → 特別なアプリアクセス から変更してください"));
+        }
+        v.addView(ins);
+        v.addView(btn("インストール許可を棚卸し", vw -> {
+            installers = com.appathy.mamoridx.ApkCleaner.INSTANCE.installers(this);
+            render(11);
+        }));
+
+        // --- バッテリー ---
+        com.appathy.mamoridx.BatteryHealth.Info b =
+                com.appathy.mamoridx.BatteryHealth.INSTANCE.read(this);
+        LinearLayout bc = card();
+        TextView bt = new TextView(this);
+        bt.setText("バッテリー劣化度");
+        bt.setTextColor(TEXT);
+        bt.setTypeface(Typeface.DEFAULT_BOLD);
+        bt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        bc.addView(bt);
+        if (b.getAvailable()) {
+            kvColor(bc, "健康度", b.getHealthPercent() + " %",
+                    b.getHealthPercent() >= 80 ? OK : (b.getHealthPercent() >= 60 ? WARN : BAD));
+            kv(bc, "推定容量", b.getCurrentCapacityMah() + " / "
+                    + b.getDesignCapacityMah() + " mAh");
+        } else {
+            kv(bc, "健康度", "設計容量を取得できない機種です");
+        }
+        kv(bc, "残量", b.getLevel() + " % / " + b.getStatusText());
+        kv(bc, "状態", b.getHealthText());
+        kv(bc, "温度", b.getTemperatureC() + " ℃");
+        if (!b.getAdvice().isEmpty()) {
+            TextView ad = new TextView(this);
+            ad.setText(b.getAdvice());
+            ad.setTextColor(SUB);
+            ad.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            ad.setPadding(0, dp(6), 0, 0);
+            bc.addView(ad);
+        }
+        v.addView(bc);
+
+        // --- PC点検 ---
+        LinearLayout pc = card();
+        TextView pt = new TextView(this);
+        pt.setText("PC点検チェックリスト");
+        pt.setTextColor(TEXT);
+        pt.setTypeface(Typeface.DEFAULT_BOLD);
+        pt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        pc.addView(pt);
+        java.util.Set<Integer> purposes = new java.util.HashSet<>();
+        purposes.add(com.appathy.mamoridx.PcAdvisor.P_CONFIDENTIAL);
+        java.util.List<com.appathy.mamoridx.PcAdvisor.Item> items =
+                com.appathy.mamoridx.PcAdvisor.INSTANCE.itemsFor(purposes);
+        kv(pc, "項目数", items.size() + " 件（機密情報を扱うPC向け）");
+        int shown = 0;
+        for (com.appathy.mamoridx.PcAdvisor.Item item : items) {
+            if (shown >= 8) {
+                break;
+            }
+            shown++;
+            TextView t = new TextView(this);
+            t.setText("・" + item.getTitle());
+            t.setTextColor(TEXT);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            t.setPadding(0, dp(4), 0, 0);
+            pc.addView(t);
+        }
+        pc.addView(note("チェック機能付きの完全版UIは次のバージョンで移植します"));
+        v.addView(pc);
+
+        v.addView(note("DNS通信の可視化（VpnService）は、出社中のクライアント通信が"
+                + "止まる恐れがあるため今回は同梱していません"));
+    }
+
+    private String mamoriLevelText(int level) {
+        if (level >= 2) {
+            return "危険";
+        }
+        if (level == 1) {
+            return "注意";
+        }
+        return "問題なし";
+    }
+
+    private int mamoriLevelColor(int level) {
+        if (level >= 2) {
+            return BAD;
+        }
+        if (level == 1) {
+            return WARN;
+        }
+        return OK;
     }
 
     private void screenAi(LinearLayout v) {
